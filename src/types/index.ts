@@ -4,7 +4,7 @@
 
 /** The structured result returned by the AI intent extraction service. */
 export interface AIExtractionResult {
-  type: "REMINDER" | "NOTE" | "TASK";
+  type: "REMINDER" | "NOTE" | "TASK" | "CHAT";
   content: string;
   dueAt: string | null;
   assignee?: string | null;

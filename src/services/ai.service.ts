@@ -15,7 +15,7 @@ const SYSTEM_PROMPT = `You are a highly accurate personal assistant that process
 
 OUTPUT FORMAT — You MUST return ONLY a single JSON object matching this schema (no markdown, no explanation, no extra keys):
 {
-  "type": "REMINDER" | "NOTE" | "TASK",
+  "type": "REMINDER" | "NOTE" | "TASK" | "CHAT",
   "content": "<clean, human-readable summary of what the user wants>",
   "dueAt": "<ISO 8601 timestamp with timezone offset, e.g. 2026-06-21T16:00:00+05:30> | null",
   "assignee": "<Name of the person the task is delegated to, if any> | null"
@@ -39,7 +39,12 @@ OUTPUT FORMAT — You MUST return ONLY a single JSON object matching this schema
    Trigger words: "note", "save this", "remember this", "liyala thiyanna", "idea", "thought", "memo", "write down"  
    → dueAt is almost always null.
 
-If ambiguous, prefer TASK over NOTE, and REMINDER over TASK (only if a time is clearly present).
+4. CHAT
+   The user is just chatting, saying hi, asking how the bot is, or asking a conversational question ("who are you", "what can you do", "hi", "hello").
+   → content MUST be your warm, conversational, friendly response to the user.
+   → dueAt MUST be null.
+
+If ambiguous, prefer TASK over NOTE, and REMINDER over TASK (only if a time is clearly present). If it's clearly just conversational, use CHAT.
 
 ─── SRI LANKAN LANGUAGE CONTEXT ───
 
@@ -209,7 +214,7 @@ export async function extractIntent(
     const result = parsed as Record<string, unknown>;
 
     // Validate 'type' field
-    const validTypes = ["REMINDER", "NOTE", "TASK"] as const;
+    const validTypes = ["REMINDER", "NOTE", "TASK", "CHAT"] as const;
     if (!validTypes.includes(result.type as (typeof validTypes)[number])) {
       throw new Error(`Invalid extraction type: ${String(result.type)}`);
     }

@@ -472,71 +472,76 @@ export function registerMessageHandler(sock: WASocket): void {
           });
         }
 
-        const task = await Task.create({
-          title: extraction.content,
-          category: extraction.type as TaskCategory,
-          dueAt: extraction.dueAt ? new Date(extraction.dueAt) : null,
-          userId: user!._id,
-        });
+        if (extraction.type === "CHAT") {
+          await sock.sendPresenceUpdate("paused", jid);
+          await sock.sendMessage(jid, { text: extraction.content }, { quoted: message });
+          console.log(`[Reply] ✅ Chat response sent to ${jid}`);
+        } else {
+          const task = await Task.create({
+            title: extraction.content,
+            category: extraction.type as TaskCategory,
+            dueAt: extraction.dueAt ? new Date(extraction.dueAt) : null,
+            userId: user!._id,
+          });
 
-        console.log(`[DB] Created ${extraction.type} (id: ${task.id}) for user ${user.id}`);
+          console.log(`[DB] Created ${extraction.type} (id: ${task.id}) for user ${user.id}`);
 
-        // ── Schedule reminder if applicable ──
-        if (extraction.type === "REMINDER" && extraction.dueAt) {
-          const executeAt = new Date(extraction.dueAt);
+          // ── Schedule reminder if applicable ──
+          if (extraction.type === "REMINDER" && extraction.dueAt) {
+            const executeAt = new Date(extraction.dueAt);
 
-          if (executeAt.getTime() > Date.now()) {
-            await scheduleReminder(task._id.toString(), executeAt, jid, extraction.content);
-          } else {
-            console.warn(
-              `[Queue] Skipped scheduling — dueAt (${extraction.dueAt}) is in the past`
-            );
+            if (executeAt.getTime() > Date.now()) {
+              await scheduleReminder(task._id.toString(), executeAt, jid, extraction.content);
+            } else {
+              console.warn(
+                `[Queue] Skipped scheduling — dueAt (${extraction.dueAt}) is in the past`
+              );
+            }
           }
-        }
 
-        // ── Google Calendar & Gmail Sync ──
-        let googleSynced = false;
-        
-        if (user.googleRefreshToken && user.googleEmail && extraction.dueAt) {
-          const eventDate = new Date(extraction.dueAt);
+          // ── Google Calendar & Gmail Sync ──
+          let googleSynced = false;
           
-          // 1. Sync event to Google Calendar
-          await createGoogleCalendarEvent(
-            user.googleRefreshToken,
+          if (user.googleRefreshToken && user.googleEmail && extraction.dueAt) {
+            const eventDate = new Date(extraction.dueAt);
+            
+            // 1. Sync event to Google Calendar
+            await createGoogleCalendarEvent(
+              user.googleRefreshToken,
+              extraction.content,
+              eventDate,
+              `Created via WhatsApp Second Brain 🧠 for Task ID: ${task._id}`
+            );
+
+            // 2. Send email notification via Gmail
+            const emailSubject = `⏰ Second Brain Alert: ${extraction.content}`;
+            const emailBody = `
+              <h3>Second Brain Reminder Saved 🧠</h3>
+              <p><strong>Task:</strong> ${extraction.content}</p>
+              <p><strong>Category:</strong> ${extraction.type}</p>
+              <p><strong>Scheduled For:</strong> ${eventDate.toString()}</p>
+              <hr />
+              <p><em>This event has been automatically synchronized with your Google Calendar.</em></p>
+            `;
+            
+            await sendGmail(user.googleRefreshToken, user.googleEmail, emailSubject, emailBody);
+            googleSynced = true;
+          }
+
+          // ── Send confirmation reply ──
+          await sock.sendPresenceUpdate("paused", jid);
+
+          const reply = buildConfirmation(
+            extraction.type as TaskCategory,
             extraction.content,
-            eventDate,
-            `Created via WhatsApp Second Brain 🧠 for Task ID: ${task._id}`
+            extraction.dueAt,
+            googleSynced,
+            extraction.assignee
           );
 
-          // 2. Send email notification via Gmail
-          const emailSubject = `⏰ Second Brain Alert: ${extraction.content}`;
-          const emailBody = `
-            <h3>Second Brain Reminder Saved 🧠</h3>
-            <p><strong>Task:</strong> ${extraction.content}</p>
-            <p><strong>Category:</strong> ${extraction.type}</p>
-            <p><strong>Scheduled For:</strong> ${eventDate.toString()}</p>
-            <hr />
-            <p><em>This event has been automatically synchronized with your Google Calendar.</em></p>
-          `;
-          
-          await sendGmail(user.googleRefreshToken, user.googleEmail, emailSubject, emailBody);
-          googleSynced = true;
+          await sock.sendMessage(jid, { text: reply }, { quoted: message });
+          console.log(`[Reply] ✅ Confirmation sent to ${jid}`);
         }
-
-        // ── Send confirmation reply ──
-        await sock.sendPresenceUpdate("paused", jid);
-
-        const reply = buildConfirmation(
-          extraction.type as TaskCategory,
-          extraction.content,
-          extraction.dueAt,
-          googleSynced,
-          extraction.assignee
-        );
-
-        await sock.sendMessage(jid, { text: reply }, { quoted: message });
-
-        console.log(`[Reply] ✅ Confirmation sent to ${jid}`);
       } catch (error: unknown) {
         const errMsg = error instanceof Error ? error.message : String(error);
         console.error(`[MessageHandler] ❌ Error processing message: ${errMsg}`);
