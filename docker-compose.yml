@@ -29,7 +29,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - OPENROUTER_API_KEY=your-openrouter-api-key-here
       - AI_MODEL=google/gemini-2.0-flash-exp:free
-      - GOOGLE_CLIENT_ID=
+      - GOOGLE_CLIENT_ID=289815195000-4259v1jc7qgttmhkppdl4to7clt2b066.apps.googleusercontent.com
       - GOOGLE_CLIENT_SECRET=
       - GOOGLE_REDIRECT_URI=http://localhost:3000/oauth2callback
       - GOOGLE_REFRESH_TOKEN=
