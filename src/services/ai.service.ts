@@ -204,8 +204,16 @@ export async function extractIntent(
       throw new Error("Empty response received from OpenRouter");
     }
 
+    // Strip markdown code fences if the model returned them
+    let cleanText = responseText;
+    if (cleanText.startsWith("```json")) {
+      cleanText = cleanText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+    } else if (cleanText.startsWith("```")) {
+      cleanText = cleanText.replace(/^```\s*/, "").replace(/\s*```$/, "");
+    }
+
     // Parse and validate the JSON response
-    const parsed: unknown = JSON.parse(responseText);
+    const parsed: unknown = JSON.parse(cleanText);
 
     if (typeof parsed !== "object" || parsed === null) {
       throw new Error("AI response is not a valid JSON object");
@@ -230,9 +238,13 @@ export async function extractIntent(
     }
 
     if (typeof result.dueAt === "string") {
-      const parsedDate = new Date(result.dueAt);
-      if (isNaN(parsedDate.getTime())) {
-        throw new Error(`Cannot parse 'dueAt' as a valid date: ${result.dueAt}`);
+      if (result.dueAt.trim() === "" || result.dueAt.toLowerCase() === "null") {
+        result.dueAt = null;
+      } else {
+        const parsedDate = new Date(result.dueAt);
+        if (isNaN(parsedDate.getTime())) {
+          throw new Error(`Cannot parse 'dueAt' as a valid date: ${result.dueAt}`);
+        }
       }
     }
 
