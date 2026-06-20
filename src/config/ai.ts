@@ -17,4 +17,4 @@ if (!OPENROUTER_API_KEY) {
 export const apiKey = OPENROUTER_API_KEY;
 
 /** Model identifier used for all OpenRouter inference calls. */
-export const AI_MODEL: string = process.env.AI_MODEL || "google/gemini-2.0-flash-exp:free";
+export const AI_MODEL: string = process.env.AI_MODEL || "google/gemini-2.0-flash-lite-preview-02-05:free";
