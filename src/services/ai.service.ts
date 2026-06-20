@@ -1,17 +1,17 @@
 /**
- * AI Service — Intent Extraction
+ * AI Service — Intent Extraction (OpenRouter Provider)
  *
- * Feeds raw WhatsApp text or audio (voice messages) to Gemini and returns
+ * Feeds raw WhatsApp text, audio (voice messages), or images to OpenRouter and returns
  * structured JSON indicating whether the message is a REMINDER, NOTE, or TASK,
  * along with parsed content and an optional ISO-8601 due date.
  *
  * The system prompt is tuned for Sri Lankan Singlish / mixed English-Sinhala.
  */
 
-import { genAI, AI_MODEL } from "../config/ai";
+import { apiKey, AI_MODEL } from "../config/ai";
 import { AIExtractionResult } from "../types";
 
-const SYSTEM_PROMPT = `You are a highly accurate personal assistant that processes WhatsApp messages (text or voice messages) for a "Second Brain" productivity system. Your sole job is to analyse the incoming message and return structured JSON.
+const SYSTEM_PROMPT = `You are a highly accurate personal assistant that processes WhatsApp messages (text, voice, or image messages) for a "Second Brain" productivity system. Your sole job is to analyse the incoming message and return structured JSON.
 
 OUTPUT FORMAT — You MUST return ONLY a single JSON object matching this schema (no markdown, no explanation, no extra keys):
 {
@@ -80,71 +80,117 @@ If the input is an audio clip, the user is speaking their mind. You must:
 3. If spoken in Sinhala, Singlish, or mixed code, translate the core task description to clean English for the 'content' field.
 4. Extract the intent and dueAt timestamp accordingly.
 
+─── IMAGE UNDERSTANDING ───
+
+If the input is an image, the user wants to extract information, a task, a note, or a schedule from it. You must:
+1. Analyse the image contents (e.g. read labels, whiteboard notes, receipts, documents, screenshots).
+2. Summarize what is shown in the image or extract the action item.
+3. Formulate a clean English summary for the 'content' field.
+4. Categorize as a TASK, NOTE, or REMINDER, and resolve any dates visible or described in the prompt to compute the dueAt timestamp.
+
 ─── IMPORTANT ───
 • Output ONLY the JSON object — no markdown fences, no explanation, no preamble.
 • Keep "content" concise but complete (translate Sinhala portions to English in the content field).
 • Never hallucinate times — if no time reference exists, set dueAt to null.`;
 
 /**
- * Sends the raw WhatsApp message text or audio to Gemini for intent extraction.
+ * Sends the raw WhatsApp message text, audio, or image to OpenRouter for intent extraction.
  *
- * @param input - Contains either 'text' or 'audio' (with base64 data and mimeType)
+ * @param input - Contains either 'text', 'audio', or 'image' (with base64 data and mimeType)
  * @param currentTimestamp - A human-readable current date/time string for the LLM.
  * @returns Structured extraction result with type, content, and optional dueAt.
  */
 export async function extractIntent(
-  input: { text?: string; audio?: { data: string; mimeType: string } },
+  input: {
+    text?: string;
+    audio?: { data: string; mimeType: string };
+    image?: { data: string; mimeType: string };
+  },
   currentTimestamp: string
 ): Promise<AIExtractionResult> {
   const userPromptText = `Current date and time: ${currentTimestamp}`;
   
-  let contents: any[] = [];
+  let contentPayload: any[] = [];
 
   if (input.audio) {
-    contents = [
+    let format = "ogg";
+    if (input.audio.mimeType.includes("mp3")) format = "mp3";
+    if (input.audio.mimeType.includes("wav")) format = "wav";
+    if (input.audio.mimeType.includes("webm")) format = "webm";
+
+    contentPayload = [
       {
-        role: "user",
-        parts: [
-          {
-            text: `${userPromptText}\n\nThe user sent a voice message. Please listen to this audio message, transcribe/translate it to English, identify the intent (REMINDER, TASK, or NOTE), and return the final JSON object.`,
-          },
-          {
-            inlineData: {
-              data: input.audio.data,
-              mimeType: input.audio.mimeType,
-            },
-          },
-        ],
+        type: "text",
+        text: `${userPromptText}\n\nThe user sent a voice message. Please listen to this audio message, transcribe/translate it to English, identify the intent (REMINDER, TASK, or NOTE), and return the final JSON object.`,
+      },
+      {
+        type: "input_audio",
+        input_audio: {
+          data: input.audio.data,
+          format: format,
+        },
+      },
+    ];
+  } else if (input.image) {
+    contentPayload = [
+      {
+        type: "text",
+        text: `${userPromptText}\n\nThe user sent an image. Please analyze this image, extract text/tasks/notes, identify the intent (REMINDER, TASK, or NOTE), and return the final JSON object.`,
+      },
+      {
+        type: "image_url",
+        image_url: {
+          url: `data:${input.image.mimeType};base64,${input.image.data}`,
+        },
       },
     ];
   } else {
-    contents = [
+    contentPayload = [
       {
-        role: "user",
-        parts: [
-          {
-            text: `${userPromptText}\n\nUser message: "${input.text || ""}"`,
-          },
-        ],
+        type: "text",
+        text: `${userPromptText}\n\nUser message: "${input.text || ""}"`,
       },
     ];
   }
 
   try {
-    const response = await genAI.models.generateContent({
-      model: AI_MODEL,
-      contents,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        temperature: 0.1,
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://github.com/chithilamanul1/memoryapp",
+        "X-Title": "Sera Second Brain",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: SYSTEM_PROMPT,
+          },
+          {
+            role: "user",
+            content: contentPayload,
+          },
+        ],
+        response_format: {
+          type: "json_object",
+        },
+        temperature: 0.1,
+      }),
     });
 
-    const responseText = response.text?.trim();
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter API responded with status ${response.status}: ${errorText}`);
+    }
+
+    const data: any = await response.json();
+    const responseText = data.choices?.[0]?.message?.content?.trim();
 
     if (!responseText) {
-      throw new Error("Empty response received from AI model");
+      throw new Error("Empty response received from OpenRouter");
     }
 
     // Parse and validate the JSON response
@@ -191,7 +237,7 @@ export async function extractIntent(
     // Graceful fallback — store as a NOTE so the user's data is never lost
     return {
       type: "NOTE",
-      content: input.text || "Voice message note (transcription failed)",
+      content: input.text || "Media note (parsing failed)",
       dueAt: null,
     };
   }

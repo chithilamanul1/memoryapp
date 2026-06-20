@@ -1,21 +1,20 @@
 /**
- * Google Generative AI (Gemini) client initialisation.
- * Validates the API key at startup and exports a reusable client instance.
+ * OpenRouter AI Configuration
+ *
+ * Validates the OpenRouter API key at startup and exports configuration variables.
  */
 
-import { GoogleGenAI } from "@google/genai";
+const OPENROUTER_API_KEY: string | undefined = process.env.OPENROUTER_API_KEY;
 
-const GEMINI_API_KEY: string | undefined = process.env.GEMINI_API_KEY;
-
-if (!GEMINI_API_KEY) {
+if (!OPENROUTER_API_KEY) {
   throw new Error(
-    "GEMINI_API_KEY is not set. Add it to your .env file. " +
-      "Get one at https://aistudio.google.com/apikey"
+    "OPENROUTER_API_KEY is not set. Add it to your .env file. " +
+      "Get one at https://openrouter.ai/keys"
   );
 }
 
-/** Pre-configured Google GenAI client. */
-export const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+/** Pre-configured OpenRouter API key. */
+export const apiKey = OPENROUTER_API_KEY;
 
-/** Model identifier used for all inference calls. */
-export const AI_MODEL: string = process.env.AI_MODEL || "gemini-2.0-flash";
+/** Model identifier used for all OpenRouter inference calls. */
+export const AI_MODEL: string = process.env.AI_MODEL || "google/gemini-2.0-flash-exp:free";

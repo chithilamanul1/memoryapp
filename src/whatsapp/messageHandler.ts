@@ -3,18 +3,20 @@
  *
  * Listens to `messages.upsert` events from Baileys and orchestrates:
  *   1. Filtering (skip self-messages, group messages, non-supported media).
- *   2. Handling voice/audio messages by downloading from WA Web servers.
+ *   2. Handling voice/audio & image messages by downloading from WA Web servers.
  *   3. Presence simulation ("composing…" indicator for a natural feel).
- *   4. AI intent extraction via Gemini (supports raw text & raw voice inputs).
+ *   4. AI intent extraction via OpenRouter (supports text, voice & image inputs).
  *   5. Prisma persistence (upsert User, create Task).
  *   6. BullMQ scheduling (if the intent is a REMINDER with a dueAt).
- *   7. Sending a human-like confirmation reply.
+ *   7. Google Calendar and Gmail sync (if credentials are set).
+ *   8. Sending a human-like confirmation reply.
  */
 
 import { WASocket, WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { PrismaClient, TaskCategory } from "@prisma/client";
 import { extractIntent } from "../services/ai.service";
 import { scheduleReminder } from "../services/queue.service";
+import { createGoogleCalendarEvent, sendGmail } from "../services/google.service";
 
 const prisma = new PrismaClient();
 
@@ -43,7 +45,6 @@ async function downloadAudioMessage(
   const msg = message.message;
   if (!msg) return null;
 
-  // Resolve audio/voice messages (handles standard audio, push-to-talk, ephemeral, and view-once)
   const audioMessage =
     msg.audioMessage ||
     msg.ephemeralMessage?.message?.audioMessage ||
@@ -57,6 +58,35 @@ async function downloadAudioMessage(
   console.log(`[Message] Downloading audio message (${mimeType}, size: ${audioMessage.fileLength} bytes)...`);
 
   const stream = await downloadContentFromMessage(audioMessage, "audio");
+  
+  let buffer = Buffer.from([]);
+  for await (const chunk of stream) {
+    buffer = Buffer.concat([buffer, chunk]);
+  }
+
+  return { data: buffer, mimeType };
+}
+
+/** Downloads and buffers an image message from WhatsApp. */
+async function downloadImageMessage(
+  message: WAMessage
+): Promise<{ data: Buffer; mimeType: string } | null> {
+  const msg = message.message;
+  if (!msg) return null;
+
+  const imageMessage =
+    msg.imageMessage ||
+    msg.ephemeralMessage?.message?.imageMessage ||
+    msg.viewOnceMessage?.message?.imageMessage ||
+    msg.viewOnceMessageV2?.message?.imageMessage;
+
+  if (!imageMessage) return null;
+
+  const mimeType = imageMessage.mimetype || "image/jpeg";
+
+  console.log(`[Message] Downloading image message (${mimeType}, size: ${imageMessage.fileLength} bytes)...`);
+
+  const stream = await downloadContentFromMessage(imageMessage, "image");
   
   let buffer = Buffer.from([]);
   for await (const chunk of stream) {
@@ -103,7 +133,8 @@ function getCurrentTimestamp(): string {
 function buildConfirmation(
   type: TaskCategory,
   content: string,
-  dueAt: string | null
+  dueAt: string | null,
+  googleSynced: boolean
 ): string {
   const icons: Record<TaskCategory, string> = {
     REMINDER: "⏰",
@@ -134,6 +165,10 @@ function buildConfirmation(
     reply += `\n🕐 ${formatted}`;
   }
 
+  if (googleSynced) {
+    reply += `\n\n📅 _Synced to Google Calendar & Gmail_`;
+  }
+
   reply += `\n\n_Stored in your Second Brain 🧠_`;
   return reply;
 }
@@ -146,7 +181,6 @@ function buildConfirmation(
  */
 export function registerMessageHandler(sock: WASocket): void {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    // Only process real-time notifications, not history sync
     if (type !== "notify") return;
 
     for (const message of messages) {
@@ -157,24 +191,26 @@ export function registerMessageHandler(sock: WASocket): void {
         const jid = getJid(message);
         if (!jid) continue;
 
-        // Skip group messages — only handle DMs
         if (jid.endsWith("@g.us")) continue;
 
         const text = getMessageText(message);
         const audio = await downloadAudioMessage(message);
+        const image = await downloadImageMessage(message);
 
-        // If neither text nor audio is present, skip (unsupported message type like contact, location, sticker)
-        if (!text && !audio) continue;
+        // If neither text, audio, nor image is present, skip
+        if (!text && !audio && !image) continue;
 
         if (text) {
           console.log(`[Message] 📩 From ${jid} (Text): "${text}"`);
         } else if (audio) {
           console.log(`[Message] 🎙️ From ${jid} (Audio): [Downloaded ${audio.data.length} bytes]`);
+        } else if (image) {
+          console.log(`[Message] 🖼️ From ${jid} (Image): [Downloaded ${image.data.length} bytes]`);
         }
 
         // ── Humanise: show "composing…" presence ──
         await sock.sendPresenceUpdate("composing", jid);
-        await sleep(1500 + Math.random() * 1000); // 1.5–2.5s natural delay
+        await sleep(1500 + Math.random() * 1000);
 
         // ── AI intent extraction ──
         const currentTimestamp = getCurrentTimestamp();
@@ -190,6 +226,16 @@ export function registerMessageHandler(sock: WASocket): void {
             },
             currentTimestamp
           );
+        } else if (image) {
+          extraction = await extractIntent(
+            {
+              image: {
+                data: image.data.toString("base64"),
+                mimeType: image.mimeType,
+              },
+            },
+            currentTimestamp
+          );
         } else {
           extraction = await extractIntent({ text: text! }, currentTimestamp);
         }
@@ -197,8 +243,6 @@ export function registerMessageHandler(sock: WASocket): void {
         console.log("[AI Result]", JSON.stringify(extraction, null, 2));
 
         // ── Persist to database ──
-
-        // Upsert the user (create on first contact, update name on subsequent)
         const user = await prisma.user.upsert({
           where: { whatsappJid: jid },
           update: { name: message.pushName || undefined },
@@ -208,7 +252,6 @@ export function registerMessageHandler(sock: WASocket): void {
           },
         });
 
-        // Create the task/note/reminder record
         const task = await prisma.task.create({
           data: {
             title: extraction.content,
@@ -233,13 +276,48 @@ export function registerMessageHandler(sock: WASocket): void {
           }
         }
 
+        // ── Google Calendar & Gmail Sync ──
+        let googleSynced = false;
+        
+        const isGoogleActive = !!(
+          process.env.GOOGLE_CLIENT_ID &&
+          process.env.GOOGLE_CLIENT_SECRET &&
+          process.env.GOOGLE_REFRESH_TOKEN
+        );
+
+        if (isGoogleActive && extraction.dueAt) {
+          const eventDate = new Date(extraction.dueAt);
+          
+          // 1. Sync event to Google Calendar
+          await createGoogleCalendarEvent(
+            extraction.content,
+            eventDate,
+            `Created via WhatsApp Second Brain 🧠 for Task ID: ${task.id}`
+          );
+
+          // 2. Send email notification via Gmail
+          const emailSubject = `⏰ Second Brain Alert: ${extraction.content}`;
+          const emailBody = `
+            <h3>Second Brain Reminder Saved 🧠</h3>
+            <p><strong>Task:</strong> ${extraction.content}</p>
+            <p><strong>Category:</strong> ${extraction.type}</p>
+            <p><strong>Scheduled For:</strong> ${eventDate.toString()}</p>
+            <hr />
+            <p><em>This event has been automatically synchronized with your Google Calendar.</em></p>
+          `;
+          
+          await sendGmail("", emailSubject, emailBody);
+          googleSynced = true;
+        }
+
         // ── Send confirmation reply ──
         await sock.sendPresenceUpdate("paused", jid);
 
         const reply = buildConfirmation(
           extraction.type as TaskCategory,
           extraction.content,
-          extraction.dueAt
+          extraction.dueAt,
+          googleSynced
         );
 
         await sock.sendMessage(jid, { text: reply }, { quoted: message });
@@ -249,7 +327,6 @@ export function registerMessageHandler(sock: WASocket): void {
         const errMsg = error instanceof Error ? error.message : String(error);
         console.error(`[MessageHandler] ❌ Error processing message: ${errMsg}`);
 
-        // Attempt to send a friendly error reply
         const jid = getJid(message);
         if (jid) {
           try {
