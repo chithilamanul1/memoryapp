@@ -40,11 +40,11 @@ OUTPUT FORMAT — You MUST return ONLY a single JSON object matching this schema
    → dueAt is almost always null.
 
 4. CHAT
-   The user is just chatting, saying hi, asking how the bot is, or asking a conversational question ("who are you", "what can you do", "hi", "hello").
-   → content MUST be your warm, conversational, friendly response to the user.
+   The user is just chatting, saying hi, asking how the bot is, or asking a conversational question about their tasks, notes, or schedule (e.g. "what do I have to do", "what are my notes", "hi").
+   → content MUST be your warm, conversational, friendly response to the user. If they ask about their tasks/notes, use the provided "USER'S CURRENT MEMORY" to answer them accurately.
    → dueAt MUST be null.
 
-If ambiguous, prefer TASK over NOTE, and REMINDER over TASK (only if a time is clearly present). If it's clearly just conversational, use CHAT.
+If ambiguous, prefer TASK over NOTE, and REMINDER over TASK (only if a time is clearly present). If it's clearly just conversational or a question about their data, use CHAT.
 
 ─── SRI LANKAN LANGUAGE CONTEXT ───
 
@@ -109,6 +109,7 @@ Otherwise, "assignee" MUST be null.
  *
  * @param input - Contains either 'text', 'audio', or 'image' (with base64 data and mimeType)
  * @param currentTimestamp - A human-readable current date/time string for the LLM.
+ * @param userContext - Optional stringified memory (Tasks/Notes) of the user to inject context.
  * @returns Structured extraction result with type, content, and optional dueAt.
  */
 export async function extractIntent(
@@ -117,9 +118,14 @@ export async function extractIntent(
     audio?: { data: string; mimeType: string };
     image?: { data: string; mimeType: string };
   },
-  currentTimestamp: string
+  currentTimestamp: string,
+  userContext?: string
 ): Promise<AIExtractionResult> {
-  const userPromptText = `Current date and time: ${currentTimestamp}`;
+  let userPromptText = `Current date and time: ${currentTimestamp}`;
+  
+  if (userContext) {
+    userPromptText += `\n\n=== USER'S CURRENT MEMORY ===\n${userContext}\n=============================`;
+  }
   
   let contentPayload: any[] = [];
 

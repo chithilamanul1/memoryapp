@@ -424,37 +424,7 @@ export function registerMessageHandler(sock: WASocket): void {
         await sock.sendPresenceUpdate("composing", jid);
         await sleep(1500 + Math.random() * 1000);
 
-        // ── AI intent extraction ──
-        const currentTimestamp = getCurrentTimestamp();
-        let extraction;
-        
-        if (audio) {
-          extraction = await extractIntent(
-            {
-              audio: {
-                data: audio.data.toString("base64"),
-                mimeType: audio.mimeType,
-              },
-            },
-            currentTimestamp
-          );
-        } else if (image) {
-          extraction = await extractIntent(
-            {
-              image: {
-                data: image.data.toString("base64"),
-                mimeType: image.mimeType,
-              },
-            },
-            currentTimestamp
-          );
-        } else {
-          extraction = await extractIntent({ text: text! }, currentTimestamp);
-        }
-
-        console.log("[AI Result]", JSON.stringify(extraction, null, 2));
-
-        // ── Persist to database ──
+        // ── Pre-fetch user and memory for context ──
         let user = await User.findOne({ whatsappJid: jid });
 
         if (user) {
@@ -471,6 +441,53 @@ export function registerMessageHandler(sock: WASocket): void {
             name: message.pushName || null,
           });
         }
+
+        // Fetch up to 30 most recent active tasks/notes to inject into AI memory
+        const activeMemories = await Task.find({
+          userId: user._id,
+          status: "PENDING",
+        })
+          .sort({ createdAt: -1 })
+          .limit(30);
+
+        let userContext = "";
+        if (activeMemories.length > 0) {
+          userContext = activeMemories
+            .map((m) => `[${m.category}] ${m.title}${m.dueAt ? ` (Due: ${m.dueAt.toISOString()})` : ""}`)
+            .join("\n");
+        }
+
+        // ── AI intent extraction ──
+        const currentTimestamp = getCurrentTimestamp();
+        let extraction;
+        
+        if (audio) {
+          extraction = await extractIntent(
+            {
+              audio: {
+                data: audio.data.toString("base64"),
+                mimeType: audio.mimeType,
+              },
+            },
+            currentTimestamp,
+            userContext
+          );
+        } else if (image) {
+          extraction = await extractIntent(
+            {
+              image: {
+                data: image.data.toString("base64"),
+                mimeType: image.mimeType,
+              },
+            },
+            currentTimestamp,
+            userContext
+          );
+        } else {
+          extraction = await extractIntent({ text: text! }, currentTimestamp, userContext);
+        }
+
+        console.log("[AI Result]", JSON.stringify(extraction, null, 2));
 
         if (extraction.type === "CHAT") {
           await sock.sendPresenceUpdate("paused", jid);
