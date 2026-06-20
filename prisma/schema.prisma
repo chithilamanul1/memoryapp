@@ -17,12 +17,14 @@ enum TaskCategory {
 }
 
 model User {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  whatsappJid String   @unique @map("whatsapp_jid")
-  name        String?
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-  tasks       Task[]
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  whatsappJid        String   @unique @map("whatsapp_jid")
+  name               String?
+  googleRefreshToken String?  @map("google_refresh_token")
+  googleEmail        String?  @map("google_email")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  tasks              Task[]
 
   @@map("users")
 }

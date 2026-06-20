@@ -3,20 +3,21 @@
  *
  * Listens to `messages.upsert` events from Baileys and orchestrates:
  *   1. Filtering (skip self-messages, group messages, non-supported media).
- *   2. Handling voice/audio & image messages by downloading from WA Web servers.
- *   3. Presence simulation ("composing…" indicator for a natural feel).
- *   4. AI intent extraction via OpenRouter (supports text, voice & image inputs).
- *   5. Prisma persistence (upsert User, create Task).
- *   6. BullMQ scheduling (if the intent is a REMINDER with a dueAt).
- *   7. Google Calendar and Gmail sync (if credentials are set).
- *   8. Sending a human-like confirmation reply.
+ *   2. Handling special command triggers like "link google".
+ *   3. Handling voice/audio & image messages by downloading from WA Web servers.
+ *   4. Presence simulation ("composing…" indicator for a natural feel).
+ *   5. AI intent extraction via OpenRouter (supports text, voice & image inputs).
+ *   6. Prisma persistence (upsert User, create Task).
+ *   7. BullMQ scheduling (if the intent is a REMINDER with a dueAt).
+ *   8. Google Calendar and Gmail sync (if the user has linked their account).
+ *   9. Sending a human-like confirmation reply.
  */
 
 import { WASocket, WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { PrismaClient, TaskCategory } from "@prisma/client";
 import { extractIntent } from "../services/ai.service";
 import { scheduleReminder } from "../services/queue.service";
-import { createGoogleCalendarEvent, sendGmail } from "../services/google.service";
+import { createGoogleCalendarEvent, sendGmail, getGoogleAuthUrl } from "../services/google.service";
 
 const prisma = new PrismaClient();
 
@@ -194,6 +195,28 @@ export function registerMessageHandler(sock: WASocket): void {
         if (jid.endsWith("@g.us")) continue;
 
         const text = getMessageText(message);
+        
+        // ── Handle Command Triggers ──
+        if (text) {
+          const trimmed = text.trim().toLowerCase();
+          if (trimmed === "link" || trimmed === "link google" || trimmed === "connect google") {
+            await sock.sendPresenceUpdate("composing", jid);
+            await sleep(1000);
+            
+            const authUrl = getGoogleAuthUrl(jid);
+            if (authUrl) {
+              await sock.sendMessage(jid, {
+                text: `🔗 *Link Your Google Account*\n\nClick the link below to grant Second Brain access to your Google Calendar & Gmail:\n\n${authUrl}\n\n_Make sure to return here after authorization!_`
+              }, { quoted: message });
+            } else {
+              await sock.sendMessage(jid, {
+                text: `⚠️ Google Integration is not configured on this server. Please add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in the .env file.`
+              }, { quoted: message });
+            }
+            continue;
+          }
+        }
+
         const audio = await downloadAudioMessage(message);
         const image = await downloadImageMessage(message);
 
@@ -279,17 +302,12 @@ export function registerMessageHandler(sock: WASocket): void {
         // ── Google Calendar & Gmail Sync ──
         let googleSynced = false;
         
-        const isGoogleActive = !!(
-          process.env.GOOGLE_CLIENT_ID &&
-          process.env.GOOGLE_CLIENT_SECRET &&
-          process.env.GOOGLE_REFRESH_TOKEN
-        );
-
-        if (isGoogleActive && extraction.dueAt) {
+        if (user.googleRefreshToken && user.googleEmail && extraction.dueAt) {
           const eventDate = new Date(extraction.dueAt);
           
           // 1. Sync event to Google Calendar
           await createGoogleCalendarEvent(
+            user.googleRefreshToken,
             extraction.content,
             eventDate,
             `Created via WhatsApp Second Brain 🧠 for Task ID: ${task.id}`
@@ -306,7 +324,7 @@ export function registerMessageHandler(sock: WASocket): void {
             <p><em>This event has been automatically synchronized with your Google Calendar.</em></p>
           `;
           
-          await sendGmail("", emailSubject, emailBody);
+          await sendGmail(user.googleRefreshToken, user.googleEmail, emailSubject, emailBody);
           googleSynced = true;
         }
 

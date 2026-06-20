@@ -16,33 +16,36 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
-import * as qrcode from "qrcode-terminal";
+import * as qrcodeTerminal from "qrcode-terminal";
 import path from "path";
 import { registerMessageHandler } from "./messageHandler";
 
 /** Directory where Baileys persists multi-file auth credentials. */
 const AUTH_DIR = path.resolve(process.cwd(), "auth_info");
 
-/** Pino logger — set to 'silent' to suppress Baileys' very verbose internals. */
 const logger = pino({ level: "silent" });
 
-/** Shared socket reference accessible by other modules via getSocket(). */
 let activeSock: WASocket | null = null;
+let latestQR: string | null = null;
+let isConnected = false;
 
-/**
- * Returns the currently active Baileys WASocket, or null if disconnected.
- * Used by the reminder worker to send scheduled messages.
- */
+/** Returns the currently active Baileys WASocket. */
 export function getSocket(): WASocket | null {
   return activeSock;
 }
 
+/** Returns the latest connection QR code if waiting for login. */
+export function getLatestQR(): string | null {
+  return latestQR;
+}
+
+/** Returns true if the WhatsApp connection is active and authenticated. */
+export function isWhatsAppConnected(): boolean {
+  return isConnected && !!activeSock;
+}
+
 /**
  * Initialises the Baileys WhatsApp connection.
- *
- * On first run, a QR code is printed to the terminal for scanning.
- * On subsequent runs, saved credentials are reused automatically.
- * If the connection drops (and the user hasn't logged out), it reconnects.
  */
 export async function startWhatsApp(): Promise<void> {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -63,7 +66,7 @@ export async function startWhatsApp(): Promise<void> {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    printQRInTerminal: false, // We handle QR display ourselves
+    printQRInTerminal: false,
     logger,
     generateHighQualityLinkPreview: true,
     markOnlineOnConnect: true,
@@ -76,14 +79,15 @@ export async function startWhatsApp(): Promise<void> {
     async (update: Partial<ConnectionState>) => {
       const { connection, lastDisconnect, qr } = update;
 
-      // Display QR code for pairing
       if (qr) {
+        latestQR = qr;
         console.log("\n📱 Scan this QR code with WhatsApp to connect:\n");
-        qrcode.generate(qr, { small: true });
-        console.log(""); // Blank line after QR for readability
+        qrcodeTerminal.generate(qr, { small: true });
+        console.log("");
       }
 
       if (connection === "close") {
+        isConnected = false;
         const statusCode =
           (lastDisconnect?.error as Boom)?.output?.statusCode ??
           DisconnectReason.connectionLost;
@@ -96,7 +100,6 @@ export async function startWhatsApp(): Promise<void> {
         );
 
         if (shouldReconnect) {
-          // Small delay before reconnecting to avoid rapid retry loops
           await new Promise((resolve) => setTimeout(resolve, 3000));
           await startWhatsApp();
         } else {
@@ -108,14 +111,14 @@ export async function startWhatsApp(): Promise<void> {
       }
 
       if (connection === "open") {
+        isConnected = true;
+        latestQR = null; // Clear QR on success
         console.log("[WhatsApp] ✅ Connected and ready to receive messages!");
       }
     }
   );
 
-  // Persist credentials whenever they update (e.g. key rotation)
   activeSock.ev.on("creds.update", saveCreds);
 
-  // Register the message handler on this socket
   registerMessageHandler(activeSock);
 }

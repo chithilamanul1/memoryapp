@@ -14,7 +14,7 @@ const REMINDER_QUEUE_NAME = "reminder-queue";
 
 /** Singleton reminder queue instance. */
 export const reminderQueue = new Queue<ReminderJobData>(REMINDER_QUEUE_NAME, {
-  connection: createRedisConnection(),
+  connection: createRedisConnection() as any,
   defaultJobOptions: {
     removeOnComplete: { count: 100 },   // Keep last 100 completed for debugging
     removeOnFail: { count: 50 },        // Keep last 50 failed for inspection
@@ -49,7 +49,7 @@ export async function scheduleReminder(
   const delayMs = Math.max(0, executeAt.getTime() - now);
 
   const job = await reminderQueue.add(
-    "send-reminder",
+    "send-reminder" as any,
     {
       taskId,
       targetJid,

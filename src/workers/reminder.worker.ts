@@ -61,7 +61,7 @@ export function startReminderWorker(): Worker<ReminderJobData> {
       }
     },
     {
-      connection: createRedisConnection(),
+      connection: createRedisConnection() as any,
       concurrency: 5,
       limiter: {
         max: 10,

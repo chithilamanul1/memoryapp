@@ -1,94 +1,138 @@
 /**
- * Google Services Integration
+ * Google Services Integration (Multi-User Capable)
  *
- * Integrates Google Calendar (for scheduling task events) and Gmail
- * (for sending alerts, summaries, and notifications).
- *
- * Uses OAuth2 credentials provided via environment variables. If they
- * are not set, it fails gracefully with warnings, allowing the bot to
- * function without Google services active.
+ * Provides functions to generate OAuth login URLs, exchange redirect codes for tokens,
+ * and perform calendar event creation / email dispatches per user.
  */
 
 import { google } from "googleapis";
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
-const GOOGLE_REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
-const USER_EMAIL = process.env.USER_EMAIL; // Default email to send summaries to
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || "http://localhost:3000/oauth2callback";
 
-const isConfigured = !!(
-  GOOGLE_CLIENT_ID &&
-  GOOGLE_CLIENT_SECRET &&
-  GOOGLE_REFRESH_TOKEN
-);
+const isConfigured = !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 
-let oauth2Client: any = null;
+/** Returns true if Google OAuth is configured on the server. */
+export function isGoogleConfigured(): boolean {
+  return isConfigured;
+}
 
-if (isConfigured) {
-  oauth2Client = new google.auth.OAuth2(
+/** Generates Google OAuth Link, storing the user's WhatsApp JID in the state parameter. */
+export function getGoogleAuthUrl(whatsappJid: string): string {
+  if (!isConfigured) return "";
+  
+  const oauth2Client = new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    GOOGLE_REDIRECT_URI || "urn:ietf:wg:oauth:2.0:oob"
+    GOOGLE_REDIRECT_URI
+  );
+
+  return oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ],
+    state: whatsappJid,
+  });
+}
+
+/** Exchanges authorization redirect code for credentials. */
+export async function getTokensFromCode(code: string): Promise<any> {
+  if (!isConfigured) {
+    throw new Error("Google OAuth credentials are not configured on this server.");
+  }
+  
+  const oauth2Client = new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI
+  );
+
+  const { tokens } = await oauth2Client.getToken(code);
+  return tokens;
+}
+
+/** Retrieves authenticated email address using a refresh token. */
+export async function getUserEmail(refreshToken: string): Promise<string | null> {
+  if (!isConfigured) return null;
+
+  const oauth2Client = new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI
+  );
+
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+  try {
+    const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+    const info = await oauth2.userinfo.get();
+    return info.data.email || null;
+  } catch (error) {
+    console.error("[Google Service] Failed to retrieve user email:", error);
+    return null;
+  }
+}
+
+/** Instantiates a user-specific Google OAuth2 Client. */
+function getClientForUser(refreshToken: string) {
+  if (!isConfigured) return null;
+
+  const oauth2Client = new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI
   );
 
   oauth2Client.setCredentials({
-    refresh_token: GOOGLE_REFRESH_TOKEN,
+    refresh_token: refreshToken,
   });
-  
-  console.log("[Google Service] ✅ OAuth2 client initialised successfully");
-} else {
-  console.warn(
-    "[Google Service] ⚠️ Credentials missing (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN). " +
-      "Google Calendar and Gmail integrations will run in simulation mode."
-  );
+
+  return oauth2Client;
 }
 
 /**
  * Creates an event in the user's primary Google Calendar.
- *
- * @param title - Event title.
- * @param dueAt - The scheduled time.
- * @param description - Additional task details.
  */
 export async function createGoogleCalendarEvent(
+  refreshToken: string,
   title: string,
   dueAt: Date,
   description?: string
 ): Promise<void> {
-  if (!isConfigured || !oauth2Client) {
-    console.warn(`[Google Calendar] Simulating event creation: "${title}" at ${dueAt.toISOString()}`);
+  const auth = getClientForUser(refreshToken);
+  if (!auth) {
+    console.warn(`[Google Calendar] Google auth skipped for "${title}" (not configured)`);
     return;
   }
 
   try {
-    const calendar = google.calendar({ version: "v3", auth: oauth2Client });
+    const calendar = google.calendar({ version: "v3", auth });
     
-    // Set event duration to 30 minutes by default
+    // Default event to 30 mins
     const endTime = new Date(dueAt.getTime() + 30 * 60 * 1000);
 
-    const event = {
-      summary: title,
-      description: description || "Created by Sera Second Brain 🧠",
-      start: {
-        dateTime: dueAt.toISOString(),
-        timeZone: process.env.TIMEZONE || "Asia/Colombo",
-      },
-      end: {
-        dateTime: endTime.toISOString(),
-        timeZone: process.env.TIMEZONE || "Asia/Colombo",
-      },
-      reminders: {
-        useDefault: true,
-      },
-    };
-
-    const res = await calendar.events.insert({
+    await calendar.events.insert({
       calendarId: "primary",
-      requestBody: event,
+      requestBody: {
+        summary: title,
+        description: description || "Created by Sera Second Brain 🧠",
+        start: {
+          dateTime: dueAt.toISOString(),
+          timeZone: process.env.TIMEZONE || "Asia/Colombo",
+        },
+        end: {
+          dateTime: endTime.toISOString(),
+          timeZone: process.env.TIMEZONE || "Asia/Colombo",
+        },
+      },
     });
 
-    console.log(`[Google Calendar] ✅ Event created: ${res.data.htmlLink}`);
+    console.log(`[Google Calendar] ✅ Event created: "${title}"`);
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[Google Calendar] ❌ Failed to create event: ${errMsg}`);
@@ -96,36 +140,26 @@ export async function createGoogleCalendarEvent(
 }
 
 /**
- * Sends an email using Gmail API.
- *
- * @param to - Recipient email.
- * @param subject - Email subject.
- * @param body - HTML or text body of the email.
+ * Sends a notification email via the user's Gmail account.
  */
 export async function sendGmail(
-  to: string,
+  refreshToken: string,
+  recipientEmail: string,
   subject: string,
   body: string
 ): Promise<void> {
-  const recipient = to || USER_EMAIL;
-  
-  if (!recipient) {
-    console.warn("[Gmail] No recipient email specified. Skipping send.");
-    return;
-  }
-
-  if (!isConfigured || !oauth2Client) {
-    console.warn(`[Gmail] Simulating email to ${recipient}: Subject: "${subject}"`);
+  const auth = getClientForUser(refreshToken);
+  if (!auth || !recipientEmail) {
+    console.warn(`[Gmail] Email to "${recipientEmail}" skipped (not configured)`);
     return;
   }
 
   try {
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const gmail = google.gmail({ version: "v1", auth });
     
-    // Create base64 RFC 2822 email format
     const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`;
     const messageParts = [
-      `To: ${recipient}`,
+      `To: ${recipientEmail}`,
       "Content-Type: text/html; charset=utf-8",
       "MIME-Version: 1.0",
       `Subject: ${utf8Subject}`,
@@ -146,7 +180,7 @@ export async function sendGmail(
       },
     });
 
-    console.log(`[Gmail] ✅ Email successfully sent to ${recipient}`);
+    console.log(`[Gmail] ✅ Email successfully sent to ${recipientEmail}`);
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[Gmail] ❌ Failed to send email: ${errMsg}`);

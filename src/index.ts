@@ -3,9 +3,10 @@
  *
  * Bootstraps the entire Sera Second Brain system:
  *   1. Loads environment variables from .env
- *   2. Connects to PostgreSQL via Prisma
- *   3. Starts the BullMQ reminder worker (Redis)
- *   4. Initialises the Baileys WhatsApp socket connection
+ *   2. Connects to MongoDB via Prisma
+ *   3. Starts the Dashboard Web Server
+ *   4. Starts the BullMQ reminder worker (Redis)
+ *   5. Initialises the Baileys WhatsApp socket connection
  *
  * Includes graceful shutdown handling for SIGINT / SIGTERM.
  */
@@ -16,6 +17,7 @@ dotenv.config();
 import { PrismaClient } from "@prisma/client";
 import { startWhatsApp } from "./whatsapp/connection";
 import { startReminderWorker } from "./workers/reminder.worker";
+import { startWebServer } from "./server";
 import { Worker } from "bullmq";
 import { ReminderJobData } from "./types";
 
@@ -30,17 +32,25 @@ async function main(): Promise<void> {
   // ── Step 1: Database ──────────────────────────────────────────────────
   try {
     await prisma.$connect();
-    console.log("[Database] ✅ PostgreSQL connected via Prisma");
+    console.log("[Database] ✅ MongoDB connected via Prisma");
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[Database] ❌ Failed to connect: ${errMsg}`);
     console.error(
-      "[Database] Make sure PostgreSQL is running and DATABASE_URL is correct in .env"
+      "[Database] Make sure MongoDB is running and DATABASE_URL is correct in .env"
     );
     process.exit(1);
   }
 
-  // ── Step 2: BullMQ Worker ─────────────────────────────────────────────
+  // ── Step 2: Web Server Dashboard ──────────────────────────────────────
+  try {
+    startWebServer();
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[Web Server] ❌ Failed to start dashboard: ${errMsg}`);
+  }
+
+  // ── Step 3: BullMQ Worker ─────────────────────────────────────────────
   try {
     reminderWorker = startReminderWorker();
     console.log("[Worker] ✅ BullMQ reminder worker initialised");
@@ -51,7 +61,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // ── Step 3: WhatsApp ──────────────────────────────────────────────────
+  // ── Step 4: WhatsApp ──────────────────────────────────────────────────
   try {
     await startWhatsApp();
     console.log("[WhatsApp] ✅ Baileys connection initialised");
