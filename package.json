@@ -7,21 +7,17 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "dev:watch": "nodemon --exec ts-node src/index.ts",
-    "prisma:generate": "npx prisma generate",
-    "prisma:migrate": "npx prisma migrate dev --name init",
-    "prisma:push": "npx prisma db push",
-    "prisma:studio": "npx prisma studio"
+    "dev:watch": "nodemon --exec ts-node src/index.ts"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@prisma/client": "^6.9.0",
     "@whiskeysockets/baileys": "^6.7.16",
     "bullmq": "^5.34.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "googleapis": "^144.0.0",
     "ioredis": "^5.6.0",
+    "mongoose": "^9.7.1",
     "pino": "^9.6.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
@@ -32,7 +28,6 @@
     "@types/qrcode": "^1.5.5",
     "@types/qrcode-terminal": "^0.12.2",
     "nodemon": "^3.1.9",
-    "prisma": "^6.9.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   },

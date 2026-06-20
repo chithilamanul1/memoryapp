@@ -14,7 +14,8 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { PrismaClient } from "@prisma/client";
+import mongoose from "mongoose";
+import { WhitelistedNumber } from "./models";
 import { startWhatsApp } from "./whatsapp/connection";
 import { startReminderWorker } from "./workers/reminder.worker";
 import { startBriefingWorker } from "./workers/briefing.worker";
@@ -25,7 +26,7 @@ import { ReminderJobData } from "./types";
 
 import { checkRedisConnection } from "./config/redis";
 
-const prisma = new PrismaClient();
+
 let reminderWorker: Worker<ReminderJobData> | null = null;
 let briefingWorker: Worker | null = null;
 
@@ -36,24 +37,24 @@ async function main(): Promise<void> {
 
   // ── Step 1: Database ──────────────────────────────────────────────────
   try {
-    await prisma.$connect();
-    console.log("[Database] ✅ MongoDB connected via Prisma");
+    await mongoose.connect(process.env.DATABASE_URL as string);
+    console.log("[Database] ✅ MongoDB connected via Mongoose");
 
     // Seed Owner from environment variables
     if (process.env.ADMIN_JID) {
       const adminPhone = process.env.ADMIN_JID.split("@")[0];
-      const existingAdmin = await prisma.whitelistedNumber.findUnique({
-        where: { phone: adminPhone },
-      });
+      const existingAdmin = await WhitelistedNumber.findOne({ phone: adminPhone });
 
       if (existingAdmin) {
-        await prisma.whitelistedNumber.update({
-          where: { phone: adminPhone },
-          data: { role: "OWNER", label: "Super Admin (Owner)" },
-        });
+        await WhitelistedNumber.updateOne(
+          { phone: adminPhone },
+          { role: "OWNER", label: "Super Admin (Owner)" }
+        );
       } else {
-        await prisma.whitelistedNumber.create({
-          data: { phone: adminPhone, role: "OWNER", label: "Super Admin (Owner)" },
+        await WhitelistedNumber.create({
+          phone: adminPhone,
+          role: "OWNER",
+          label: "Super Admin (Owner)",
         });
       }
       console.log(`[Database] ✅ Seeded Admin/Owner number: +${adminPhone}`);
@@ -119,7 +120,7 @@ async function shutdown(signal: string): Promise<void> {
   }
 
   try {
-    await prisma.$disconnect();
+    await mongoose.disconnect();
     console.log("[Shutdown] Database disconnected");
   } catch (err) {
     console.error("[Shutdown] Error disconnecting database:", err);

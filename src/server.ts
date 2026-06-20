@@ -11,12 +11,10 @@
 
 import express from "express";
 import QRCode from "qrcode";
-import { PrismaClient } from "@prisma/client";
+import { User, Task, WhitelistedNumber } from "./models";
 import { getLatestQR, isWhatsAppConnected } from "./whatsapp/connection";
 import { getGoogleAuthUrl, getTokensFromCode, getUserEmail, isGoogleConfigured } from "./services/google.service";
 import { blockedAttempts } from "./whatsapp/messageHandler";
-
-const prisma = new PrismaClient();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -34,27 +32,28 @@ app.get("/", async (req, res) => {
       qrImageBase64 = await QRCode.toDataURL(qrRaw);
     }
 
-    const users = await prisma.user.findMany({
-      include: {
-        _count: {
-          select: { tasks: true },
-        },
-      },
-    });
+    const usersDocs = await User.find().lean();
+    const users = await Promise.all(usersDocs.map(async (u) => {
+      const taskCount = await Task.countDocuments({ userId: u._id });
+      return { ...u, _count: { tasks: taskCount } };
+    }));
 
-    const totalTasks = await prisma.task.count();
-    const completedTasks = await prisma.task.count({ where: { completed: true } });
+    const totalTasks = await Task.countDocuments();
+    const completedTasks = await Task.countDocuments({ completed: true });
     const pendingTasks = totalTasks - completedTasks;
 
-    const recentTasks = await prisma.task.findMany({
-      take: 5,
-      orderBy: { createdAt: "desc" },
-      include: { user: true },
-    });
+    const recentTasksDocs = await Task.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate('userId')
+      .lean();
+    
+    const recentTasks = recentTasksDocs.map(t => ({
+      ...t,
+      user: t.userId
+    }));
 
-    const whitelistedNumbers = await prisma.whitelistedNumber.findMany({
-      orderBy: { createdAt: "desc" },
-    });
+    const whitelistedNumbers = await WhitelistedNumber.find().sort({ createdAt: -1 }).lean();
 
     const googleActive = isGoogleConfigured();
 
@@ -467,18 +466,16 @@ app.post("/whitelist/add", async (req, res) => {
   const targetRole = (role === "OWNER" || role === "ADMIN" || role === "MEMBER") ? role : "MEMBER";
 
   try {
-    const existingWhitelist = await prisma.whitelistedNumber.findUnique({
-      where: { phone: cleanPhone },
-    });
+    const existingWhitelist = await WhitelistedNumber.findOne({ phone: cleanPhone });
 
     if (existingWhitelist) {
-      await prisma.whitelistedNumber.update({
-        where: { phone: cleanPhone },
-        data: { label: label || null, role: targetRole, active: true },
-      });
+      await WhitelistedNumber.updateOne(
+        { phone: cleanPhone },
+        { label: label || null, role: targetRole, active: true }
+      );
     } else {
-      await prisma.whitelistedNumber.create({
-        data: { phone: cleanPhone, label: label || null, role: targetRole },
+      await WhitelistedNumber.create({
+        phone: cleanPhone, label: label || null, role: targetRole
       });
     }
 
@@ -500,7 +497,7 @@ app.get("/whitelist/toggle", async (req, res) => {
   }
 
   try {
-    const existing = await prisma.whitelistedNumber.findUnique({ where: { id: id as string } });
+    const existing = await WhitelistedNumber.findById(id as string);
     if (!existing) {
       return res.redirect("/?error=" + encodeURIComponent("Number not found."));
     }
@@ -509,10 +506,10 @@ app.get("/whitelist/toggle", async (req, res) => {
       return res.redirect("/?error=" + encodeURIComponent("Cannot disable the Owner."));
     }
 
-    await prisma.whitelistedNumber.update({
-      where: { id: id as string },
-      data: { active: !existing.active },
-    });
+    await WhitelistedNumber.updateOne(
+      { _id: id as string },
+      { active: !existing.active }
+    );
 
     const status = !existing.active ? "enabled" : "disabled";
     console.log(`[Whitelist] Toggled ${existing.phone} → ${status}`);
@@ -532,7 +529,7 @@ app.get("/whitelist/remove", async (req, res) => {
   }
 
   try {
-    const existing = await prisma.whitelistedNumber.findUnique({ where: { id: id as string } });
+    const existing = await WhitelistedNumber.findById(id as string);
     if (!existing) {
       return res.redirect("/?error=" + encodeURIComponent("Number not found."));
     }
@@ -541,7 +538,7 @@ app.get("/whitelist/remove", async (req, res) => {
       return res.redirect("/?error=" + encodeURIComponent("Cannot remove the Owner."));
     }
 
-    await prisma.whitelistedNumber.delete({ where: { id: id as string } });
+    await WhitelistedNumber.deleteOne({ _id: id as string });
     console.log(`[Whitelist] ❌ Removed number: ${existing.phone}`);
     res.redirect("/?success=" + encodeURIComponent(`Number ${existing.phone} has been removed from the whitelist.`));
   } catch (error: unknown) {
@@ -567,13 +564,13 @@ app.get("/oauth2callback", async (req, res) => {
     }
 
     // Save tokens on the matching User record in MongoDB
-    await prisma.user.update({
-      where: { whatsappJid: whatsappJid as string },
-      data: {
+    await User.updateOne(
+      { whatsappJid: whatsappJid as string },
+      {
         googleRefreshToken: tokens.refresh_token,
         googleEmail: email,
-      },
-    });
+      }
+    );
 
     console.log(`[OAuth] Successfully linked Google Account (${email}) to JID: ${whatsappJid}`);
     res.redirect("/?success=" + encodeURIComponent(`Successfully linked ${email} to ${whatsappJid}!`));
@@ -593,13 +590,13 @@ app.get("/unlink-google", async (req, res) => {
   }
 
   try {
-    await prisma.user.update({
-      where: { whatsappJid: jid as string },
-      data: {
+    await User.updateOne(
+      { whatsappJid: jid as string },
+      {
         googleRefreshToken: null,
         googleEmail: null,
-      },
-    });
+      }
+    );
 
     res.redirect("/?success=" + encodeURIComponent(`Successfully unlinked Google Account for ${jid}`));
   } catch (error: unknown) {

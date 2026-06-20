@@ -8,12 +8,10 @@
  */
 
 import { Worker, Job } from "bullmq";
-import { PrismaClient } from "@prisma/client";
+import { Task } from "../models";
 import { createRedisConnection } from "../config/redis";
 import { ReminderJobData } from "../types";
 import { getSocket } from "../whatsapp/connection";
-
-const prisma = new PrismaClient();
 
 /**
  * Starts the BullMQ worker that processes reminder jobs.
@@ -48,10 +46,10 @@ export function startReminderWorker(): Worker<ReminderJobData> {
         });
 
         // Mark the task as completed in the database
-        await prisma.task.update({
-          where: { id: taskId },
-          data: { completed: true },
-        });
+        await Task.updateOne(
+          { _id: taskId },
+          { completed: true }
+        );
 
         console.log(`[Worker] ✅ Reminder delivered: "${message}"`);
       } catch (error: unknown) {

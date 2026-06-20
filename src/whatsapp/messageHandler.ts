@@ -14,12 +14,10 @@
  */
 
 import { WASocket, WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { PrismaClient, TaskCategory, WhitelistRole } from "@prisma/client";
+import { User, Task, WhitelistedNumber, WhitelistRole, TaskCategory } from "../models";
 import { extractIntent } from "../services/ai.service";
 import { scheduleReminder } from "../services/queue.service";
 import { createGoogleCalendarEvent, sendGmail, getGoogleAuthUrl } from "../services/google.service";
-
-const prisma = new PrismaClient();
 
 const TIMEZONE: string = process.env.TIMEZONE || "Asia/Colombo";
 const ADMIN_JID: string = process.env.ADMIN_JID || "";
@@ -58,13 +56,11 @@ export async function getJidRole(jid: string): Promise<WhitelistRole | null> {
     }
   }
 
-  const entry = await prisma.whitelistedNumber.findFirst({
-    where: {
-      OR: [
-        { phone: phoneOnly },
-        { phone: jid }
-      ]
-    }
+  const entry = await WhitelistedNumber.findOne({
+    $or: [
+      { phone: phoneOnly },
+      { phone: jid }
+    ]
   });
 
   if (!entry || !entry.active) return null;
@@ -305,18 +301,16 @@ export function registerMessageHandler(sock: WASocket): void {
 
               const cleanPhone = targetPhone.replace(/\+/g, "");
 
-              const existingWhitelist = await prisma.whitelistedNumber.findUnique({
-                where: { phone: cleanPhone },
-              });
+              const existingWhitelist = await WhitelistedNumber.findOne({ phone: cleanPhone });
 
               if (existingWhitelist) {
-                await prisma.whitelistedNumber.update({
-                  where: { phone: cleanPhone },
-                  data: { label: label || null, role: targetRole, active: true },
-                });
+                await WhitelistedNumber.updateOne(
+                  { phone: cleanPhone },
+                  { label: label || null, role: targetRole, active: true }
+                );
               } else {
-                await prisma.whitelistedNumber.create({
-                  data: { phone: cleanPhone, label: label || null, role: targetRole },
+                await WhitelistedNumber.create({
+                  phone: cleanPhone, label: label || null, role: targetRole
                 });
               }
 
@@ -335,17 +329,14 @@ export function registerMessageHandler(sock: WASocket): void {
 
               const cleanPhone = targetPhone.replace(/\+/g, "");
 
-              const existing = await prisma.whitelistedNumber.findUnique({
-                where: { phone: cleanPhone },
-              });
-
+              const existing = await WhitelistedNumber.findOne({ phone: cleanPhone });
               if (!existing) {
-                await sock.sendMessage(jid, { text: `❌ Number/JID *${cleanPhone}* is not on the whitelist.` }, { quoted: message });
+                await sock.sendMessage(jid, { text: `⚠️ Number *+${cleanPhone}* is not whitelisted.` }, { quoted: message });
                 continue;
               }
 
-              if (existing.role === "OWNER" && role !== "OWNER") {
-                await sock.sendMessage(jid, { text: "❌ You cannot remove the Owner." }, { quoted: message });
+              if (existing.role === "OWNER") {
+                await sock.sendMessage(jid, { text: `❌ Cannot remove the OWNER.` }, { quoted: message });
                 continue;
               }
               if (existing.role === "ADMIN" && role !== "OWNER") {
@@ -353,9 +344,7 @@ export function registerMessageHandler(sock: WASocket): void {
                 continue;
               }
 
-              await prisma.whitelistedNumber.delete({
-                where: { phone: cleanPhone },
-              });
+              await WhitelistedNumber.deleteOne({ phone: cleanPhone });
 
               await sock.sendMessage(jid, {
                 text: `✅ *Removed*\n\nNumber/JID *${cleanPhone}* has been removed from the whitelist.`,
@@ -364,9 +353,7 @@ export function registerMessageHandler(sock: WASocket): void {
             }
 
             if (cmd === "list") {
-              const all = await prisma.whitelistedNumber.findMany({
-                orderBy: { role: "asc" },
-              });
+              const all = await WhitelistedNumber.find().sort({ role: 1, phone: 1 });
 
               let listText = "📋 *Whitelisted Numbers & JIDs:*\n\n";
               for (const item of all) {
@@ -465,33 +452,28 @@ export function registerMessageHandler(sock: WASocket): void {
         console.log("[AI Result]", JSON.stringify(extraction, null, 2));
 
         // ── Persist to database ──
-        let user = await prisma.user.findUnique({
-          where: { whatsappJid: jid },
-        });
+        let user = await User.findOne({ whatsappJid: jid });
 
         if (user) {
           if (message.pushName && message.pushName !== user.name) {
-            user = await prisma.user.update({
-              where: { whatsappJid: jid },
-              data: { name: message.pushName },
-            });
+            user = await User.findOneAndUpdate(
+              { whatsappJid: jid },
+              { name: message.pushName },
+              { new: true }
+            );
           }
         } else {
-          user = await prisma.user.create({
-            data: {
-              whatsappJid: jid,
-              name: message.pushName || null,
-            },
+          user = await User.create({
+            whatsappJid: jid,
+            name: message.pushName || null,
           });
         }
 
-        const task = await prisma.task.create({
-          data: {
-            title: extraction.content,
-            category: extraction.type as TaskCategory,
-            dueAt: extraction.dueAt ? new Date(extraction.dueAt) : null,
-            userId: user.id,
-          },
+        const task = await Task.create({
+          title: extraction.content,
+          category: extraction.type as TaskCategory,
+          dueAt: extraction.dueAt ? new Date(extraction.dueAt) : null,
+          userId: user!._id,
         });
 
         console.log(`[DB] Created ${extraction.type} (id: ${task.id}) for user ${user.id}`);
@@ -501,7 +483,7 @@ export function registerMessageHandler(sock: WASocket): void {
           const executeAt = new Date(extraction.dueAt);
 
           if (executeAt.getTime() > Date.now()) {
-            await scheduleReminder(task.id, executeAt, jid, extraction.content);
+            await scheduleReminder(task._id.toString(), executeAt, jid, extraction.content);
           } else {
             console.warn(
               `[Queue] Skipped scheduling — dueAt (${extraction.dueAt}) is in the past`
@@ -520,7 +502,7 @@ export function registerMessageHandler(sock: WASocket): void {
             user.googleRefreshToken,
             extraction.content,
             eventDate,
-            `Created via WhatsApp Second Brain 🧠 for Task ID: ${task.id}`
+            `Created via WhatsApp Second Brain 🧠 for Task ID: ${task._id}`
           );
 
           // 2. Send email notification via Gmail

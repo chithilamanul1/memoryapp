@@ -1,10 +1,8 @@
 import { Worker, Job } from "bullmq";
-import { PrismaClient } from "@prisma/client";
+import { User, Task } from "../models";
 import { createRedisConnection } from "../config/redis";
 import { getSocket } from "../whatsapp/connection";
 import { generateMorningBriefing } from "../services/ai.service";
-
-const prisma = new PrismaClient();
 
 /**
  * Starts the BullMQ worker that processes the daily morning briefing.
@@ -32,28 +30,27 @@ export function startBriefingWorker(): Worker {
       endOfDay.setHours(23, 59, 59, 999);
 
       try {
-        const users = await prisma.user.findMany({
-          include: {
-            tasks: {
-              where: {
-                completed: false,
-                dueAt: {
-                  gte: startOfDay,
-                  lte: endOfDay,
-                },
-              },
+        const users = await User.find().lean();
+        const usersWithTasks = await Promise.all(users.map(async (u) => {
+          const tasks = await Task.find({
+            userId: u._id,
+            completed: false,
+            dueAt: {
+              $gte: startOfDay,
+              $lte: endOfDay,
             },
-          },
-        });
+          }).lean();
+          return { ...u, tasks };
+        }));
 
-        console.log(`[BriefingWorker] Found ${users.length} active users to check for briefings.`);
+        console.log(`[BriefingWorker] Found ${usersWithTasks.length} active users to check for briefings.`);
 
-        for (const user of users) {
+        for (const user of usersWithTasks) {
           if (user.tasks.length === 0) {
             continue; // No tasks due today, skip briefing
           }
 
-          const taskDescriptions = user.tasks.map(t => t.title);
+          const taskDescriptions = user.tasks.map((t: any) => t.title);
           const userName = user.name || "friend";
 
           console.log(`[BriefingWorker] Generating briefing for ${user.whatsappJid} with ${taskDescriptions.length} tasks...`);
