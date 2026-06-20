@@ -42,11 +42,20 @@ async function main(): Promise<void> {
     // Seed Owner from environment variables
     if (process.env.ADMIN_JID) {
       const adminPhone = process.env.ADMIN_JID.split("@")[0];
-      await prisma.whitelistedNumber.upsert({
+      const existingAdmin = await prisma.whitelistedNumber.findUnique({
         where: { phone: adminPhone },
-        update: { role: "OWNER", label: "Super Admin (Owner)" },
-        create: { phone: adminPhone, role: "OWNER", label: "Super Admin (Owner)" },
       });
+
+      if (existingAdmin) {
+        await prisma.whitelistedNumber.update({
+          where: { phone: adminPhone },
+          data: { role: "OWNER", label: "Super Admin (Owner)" },
+        });
+      } else {
+        await prisma.whitelistedNumber.create({
+          data: { phone: adminPhone, role: "OWNER", label: "Super Admin (Owner)" },
+        });
+      }
       console.log(`[Database] ✅ Seeded Admin/Owner number: +${adminPhone}`);
     }
   } catch (error: unknown) {

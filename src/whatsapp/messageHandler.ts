@@ -305,11 +305,20 @@ export function registerMessageHandler(sock: WASocket): void {
 
               const cleanPhone = targetPhone.replace(/\+/g, "");
 
-              await prisma.whitelistedNumber.upsert({
+              const existingWhitelist = await prisma.whitelistedNumber.findUnique({
                 where: { phone: cleanPhone },
-                update: { label: label || null, role: targetRole, active: true },
-                create: { phone: cleanPhone, label: label || null, role: targetRole },
               });
+
+              if (existingWhitelist) {
+                await prisma.whitelistedNumber.update({
+                  where: { phone: cleanPhone },
+                  data: { label: label || null, role: targetRole, active: true },
+                });
+              } else {
+                await prisma.whitelistedNumber.create({
+                  data: { phone: cleanPhone, label: label || null, role: targetRole },
+                });
+              }
 
               await sock.sendMessage(jid, {
                 text: `✅ *Success*\n\nNumber/JID *+${cleanPhone}* has been whitelisted as *${targetRole}*.\nLabel: ${label || "none"}`,
@@ -456,14 +465,25 @@ export function registerMessageHandler(sock: WASocket): void {
         console.log("[AI Result]", JSON.stringify(extraction, null, 2));
 
         // ── Persist to database ──
-        const user = await prisma.user.upsert({
+        let user = await prisma.user.findUnique({
           where: { whatsappJid: jid },
-          update: { name: message.pushName || undefined },
-          create: {
-            whatsappJid: jid,
-            name: message.pushName || null,
-          },
         });
+
+        if (user) {
+          if (message.pushName && message.pushName !== user.name) {
+            user = await prisma.user.update({
+              where: { whatsappJid: jid },
+              data: { name: message.pushName },
+            });
+          }
+        } else {
+          user = await prisma.user.create({
+            data: {
+              whatsappJid: jid,
+              name: message.pushName || null,
+            },
+          });
+        }
 
         const task = await prisma.task.create({
           data: {

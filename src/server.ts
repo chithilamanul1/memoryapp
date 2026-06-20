@@ -467,11 +467,20 @@ app.post("/whitelist/add", async (req, res) => {
   const targetRole = (role === "OWNER" || role === "ADMIN" || role === "MEMBER") ? role : "MEMBER";
 
   try {
-    await prisma.whitelistedNumber.upsert({
+    const existingWhitelist = await prisma.whitelistedNumber.findUnique({
       where: { phone: cleanPhone },
-      update: { label: label || null, role: targetRole, active: true },
-      create: { phone: cleanPhone, label: label || null, role: targetRole },
     });
+
+    if (existingWhitelist) {
+      await prisma.whitelistedNumber.update({
+        where: { phone: cleanPhone },
+        data: { label: label || null, role: targetRole, active: true },
+      });
+    } else {
+      await prisma.whitelistedNumber.create({
+        data: { phone: cleanPhone, label: label || null, role: targetRole },
+      });
+    }
 
     console.log(`[Whitelist] ✅ Added/updated: ${cleanPhone} (${label || 'no label'}, role: ${targetRole})`);
     res.redirect("/?success=" + encodeURIComponent(`Number/JID ${cleanPhone} has been whitelisted as ${targetRole}!`));
