@@ -445,7 +445,7 @@ export function registerMessageHandler(sock: WASocket): void {
         // Fetch up to 30 most recent active tasks/notes to inject into AI memory
         const activeMemories = await Task.find({
           userId: user._id,
-          status: "PENDING",
+          completed: false,
         })
           .sort({ createdAt: -1 })
           .limit(30);
