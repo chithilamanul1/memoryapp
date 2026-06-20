@@ -8,7 +8,7 @@
  * The system prompt is tuned for Sri Lankan Singlish / mixed English-Sinhala.
  */
 
-import { apiKey, AI_MODEL } from "../config/ai";
+import { apiKey, AI_MODEL, AI_BASE_URL } from "../config/ai";
 import { AIExtractionResult } from "../types";
 
 const SYSTEM_PROMPT = `You are a highly accurate personal assistant that processes WhatsApp messages (text, voice, or image messages) for a "Second Brain" productivity system. Your sole job is to analyse the incoming message and return structured JSON.
@@ -171,7 +171,7 @@ export async function extractIntent(
   }
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const response = await fetch(AI_BASE_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -302,7 +302,7 @@ Requirements:
   `.trim();
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const response = await fetch(AI_BASE_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,

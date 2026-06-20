@@ -1,20 +1,22 @@
 /**
- * OpenRouter AI Configuration
+ * AI Configuration
  *
- * Validates the OpenRouter API key at startup and exports configuration variables.
+ * Validates the API key at startup and exports configuration variables.
  */
 
-const OPENROUTER_API_KEY: string | undefined = process.env.OPENROUTER_API_KEY;
+const API_KEY: string | undefined = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
 
-if (!OPENROUTER_API_KEY) {
+if (!API_KEY) {
   throw new Error(
-    "OPENROUTER_API_KEY is not set. Add it to your .env file. " +
-      "Get one at https://openrouter.ai/keys"
+    "API Key is not set. Add OPENROUTER_API_KEY or GEMINI_API_KEY to your .env file."
   );
 }
 
-/** Pre-configured OpenRouter API key. */
-export const apiKey = OPENROUTER_API_KEY;
+/** Pre-configured API key. */
+export const apiKey = API_KEY;
 
-/** Model identifier used for all OpenRouter inference calls. */
-export const AI_MODEL: string = process.env.AI_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
+/** Model identifier used for inference calls. */
+export const AI_MODEL: string = process.env.AI_MODEL || "gemini-2.5-flash";
+
+/** Base URL for the OpenAI-compatible API endpoint */
+export const AI_BASE_URL: string = process.env.AI_BASE_URL || "https://openrouter.ai/api/v1/chat/completions";
