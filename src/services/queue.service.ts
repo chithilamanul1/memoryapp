@@ -9,7 +9,7 @@
  */
 
 import { Queue } from "bullmq";
-import { createRedisConnection } from "../config/redis";
+import { createRedisConnection, isRedisAvailable } from "../config/redis";
 import { ReminderJobData } from "../types";
 
 const REMINDER_QUEUE_NAME = "reminder-queue";
@@ -23,7 +23,7 @@ let queueInitFailed = false;
  * Returns null if Redis is not available.
  */
 function getQueue(): Queue<ReminderJobData> | null {
-  if (queueInitFailed) return null;
+  if (queueInitFailed || !isRedisAvailable()) return null;
   if (reminderQueue) return reminderQueue;
 
   try {

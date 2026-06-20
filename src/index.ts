@@ -21,6 +21,8 @@ import { startWebServer } from "./server";
 import { Worker } from "bullmq";
 import { ReminderJobData } from "./types";
 
+import { checkRedisConnection } from "./config/redis";
+
 const prisma = new PrismaClient();
 let reminderWorker: Worker<ReminderJobData> | null = null;
 
@@ -51,12 +53,17 @@ async function main(): Promise<void> {
   }
 
   // ── Step 3: BullMQ Worker (Optional — fails gracefully if Redis unavailable) ──
-  try {
-    reminderWorker = startReminderWorker();
-    console.log("[Worker] ✅ BullMQ reminder worker initialised");
-  } catch (error: unknown) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn(`[Worker] ⚠️ Reminder worker failed to initialize: ${errMsg}`);
+  const redisUp = await checkRedisConnection();
+  if (redisUp) {
+    try {
+      reminderWorker = startReminderWorker();
+      console.log("[Worker] ✅ BullMQ reminder worker initialised");
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.warn(`[Worker] ⚠️ Reminder worker failed to initialize: ${errMsg}`);
+    }
+  } else {
+    console.warn("[Worker] ⚠️ Redis is down or unavailable. Reminder worker disabled.");
   }
 
   // ── Step 4: WhatsApp ──────────────────────────────────────────────────

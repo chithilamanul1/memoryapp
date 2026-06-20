@@ -10,10 +10,55 @@ import IORedis from "ioredis";
 
 const REDIS_URL: string = process.env.REDIS_URL || "redis://localhost:6379";
 
-let redisAvailable: boolean | null = null; // null = unknown
+let redisAvailable = false;
 
 export function isRedisAvailable(): boolean {
-  return redisAvailable === true;
+  return redisAvailable;
+}
+
+/**
+ * Checks if Redis is available by attempting a connection with a timeout.
+ * This prevents BullMQ from running and spamming connection errors.
+ */
+export async function checkRedisConnection(): Promise<boolean> {
+  console.log(`[Redis] Testing connection to ${REDIS_URL}...`);
+  return new Promise((resolve) => {
+    const client = new IORedis(REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      connectTimeout: 2000,
+      showFriendlyErrorStack: false,
+    });
+
+    let resolved = false;
+
+    client.on("connect", () => {
+      if (!resolved) {
+        resolved = true;
+        redisAvailable = true;
+        client.disconnect();
+        resolve(true);
+      }
+    });
+
+    client.on("error", () => {
+      if (!resolved) {
+        resolved = true;
+        redisAvailable = false;
+        client.disconnect();
+        resolve(false);
+      }
+    });
+
+    // Fallback timeout
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        redisAvailable = false;
+        client.disconnect();
+        resolve(false);
+      }
+    }, 2500);
+  });
 }
 
 export function createRedisConnection(): IORedis {
@@ -27,20 +72,16 @@ export function createRedisConnection(): IORedis {
         return null; // Stop retrying
       }
       const delay = Math.min(times * 1000, 3000);
-      if (times === 1) {
-        console.warn(`[Redis] Connecting to ${REDIS_URL}...`);
-      }
       return delay;
     },
   });
 
   connection.on("error", () => {
-    // Silently ignore — retryStrategy handles logging
+    // Silently ignore — checkRedisConnection and retryStrategy handle logging
   });
 
   connection.on("connect", () => {
     redisAvailable = true;
-    console.log("[Redis] ✅ Connected successfully");
   });
 
   return connection;
