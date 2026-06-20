@@ -50,20 +50,13 @@ async function main(): Promise<void> {
     console.error(`[Web Server] ❌ Failed to start dashboard: ${errMsg}`);
   }
 
-  // ── Step 3: BullMQ Worker (Optional — skipped if Redis unavailable) ──
-  const redisUrl = process.env.REDIS_URL || "";
-  const redisConfigured = redisUrl && !redisUrl.includes("localhost") && !redisUrl.includes("127.0.0.1");
-  
-  if (redisConfigured) {
-    try {
-      reminderWorker = startReminderWorker();
-      console.log("[Worker] ✅ BullMQ reminder worker initialised");
-    } catch (error: unknown) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(`[Worker] ⚠️ Reminder worker not available: ${errMsg}`);
-    }
-  } else {
-    console.warn("[Worker] ⚠️ Redis not configured — reminder scheduling disabled");
+  // ── Step 3: BullMQ Worker (Optional — fails gracefully if Redis unavailable) ──
+  try {
+    reminderWorker = startReminderWorker();
+    console.log("[Worker] ✅ BullMQ reminder worker initialised");
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.warn(`[Worker] ⚠️ Reminder worker failed to initialize: ${errMsg}`);
   }
 
   // ── Step 4: WhatsApp ──────────────────────────────────────────────────
