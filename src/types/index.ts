@@ -7,6 +7,7 @@ export interface AIExtractionResult {
   type: "REMINDER" | "NOTE" | "TASK";
   content: string;
   dueAt: string | null;
+  assignee?: string | null;
 }
 
 /** Data payload stored in each BullMQ reminder job. */

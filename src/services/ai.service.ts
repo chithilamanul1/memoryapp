@@ -17,7 +17,8 @@ OUTPUT FORMAT — You MUST return ONLY a single JSON object matching this schema
 {
   "type": "REMINDER" | "NOTE" | "TASK",
   "content": "<clean, human-readable summary of what the user wants>",
-  "dueAt": "<ISO 8601 timestamp with timezone offset, e.g. 2026-06-21T16:00:00+05:30> | null"
+  "dueAt": "<ISO 8601 timestamp with timezone offset, e.g. 2026-06-21T16:00:00+05:30> | null",
+  "assignee": "<Name of the person the task is delegated to, if any> | null"
 }
 
 ─── CLASSIFICATION RULES ───
@@ -87,6 +88,11 @@ If the input is an image, the user wants to extract information, a task, a note,
 2. Summarize what is shown in the image or extract the action item.
 3. Formulate a clean English summary for the 'content' field.
 4. Categorize as a TASK, NOTE, or REMINDER, and resolve any dates visible or described in the prompt to compute the dueAt timestamp.
+
+─── DELEGATED REMINDERS ───
+
+If the user asks to remind SOMEONE ELSE (e.g. "Remind Nimal to call me", "Kamal ta kiyanna heta enna kiyala"), extract that person's name into the "assignee" field.
+Otherwise, "assignee" MUST be null.
 
 ─── IMPORTANT ───
 • Output ONLY the JSON object — no markdown fences, no explanation, no preamble.
@@ -225,10 +231,15 @@ export async function extractIntent(
       }
     }
 
+    if (result.assignee !== undefined && result.assignee !== null && typeof result.assignee !== "string") {
+      throw new Error(`Invalid 'assignee' field type: ${typeof result.assignee}`);
+    }
+
     return {
       type: result.type as AIExtractionResult["type"],
       content: result.content as string,
       dueAt: (result.dueAt as string) ?? null,
+      assignee: (result.assignee as string) ?? null,
     };
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -239,6 +250,74 @@ export async function extractIntent(
       type: "NOTE",
       content: input.text || "Media note (parsing failed)",
       dueAt: null,
+      assignee: null,
     };
+  }
+}
+
+/**
+ * Generates a warm, conversational morning summary for the user's daily tasks.
+ * 
+ * @param userName The user's name or label
+ * @param tasks An array of strings representing the tasks due today
+ * @returns A friendly morning greeting message in Singlish/English
+ */
+export async function generateMorningBriefing(userName: string, tasks: string[]): Promise<string> {
+  const userPrompt = `
+Current date and time: ${new Date().toLocaleString("en-US", { timeZone: "Asia/Colombo" })}
+User: ${userName}
+Tasks due today:
+${tasks.map((t, i) => `${i + 1}. ${t}`).join("\n")}
+
+Write a friendly, encouraging morning briefing message for this user.
+Requirements:
+1. Greet them warmly (e.g. "Good morning! ☀️").
+2. Use a mix of Sri Lankan English (Singlish) or clean English, keeping it natural and friendly.
+3. Summarize their tasks for the day in a short paragraph or bullet points.
+4. Keep the entire message concise, actionable, and pleasant.
+5. Do NOT output JSON. Return ONLY the text message that will be sent via WhatsApp.
+  `.trim();
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://github.com/chithilamanul1/memoryapp",
+        "X-Title": "Sera Second Brain",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: "You are a warm, helpful personal assistant for a Second Brain productivity system in Sri Lanka. Write a friendly morning briefing.",
+          },
+          {
+            role: "user",
+            content: userPrompt,
+          },
+        ],
+        temperature: 0.7,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenRouter API responded with status ${response.status}`);
+    }
+
+    const data: any = await response.json();
+    const responseText = data.choices?.[0]?.message?.content?.trim();
+
+    if (!responseText) {
+      throw new Error("Empty response received from OpenRouter");
+    }
+
+    return responseText;
+  } catch (error) {
+    console.error("[AI Service] Morning briefing generation failed:", error);
+    // Fallback message if AI fails
+    return `Good morning, ${userName}! ☀️\n\nYou have ${tasks.length} things on your plate today:\n${tasks.map(t => "• " + t).join("\n")}\n\nHave a productive day!`;
   }
 }

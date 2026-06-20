@@ -17,6 +17,8 @@ dotenv.config();
 import { PrismaClient } from "@prisma/client";
 import { startWhatsApp } from "./whatsapp/connection";
 import { startReminderWorker } from "./workers/reminder.worker";
+import { startBriefingWorker } from "./workers/briefing.worker";
+import { setupBriefingCron } from "./services/queue.service";
 import { startWebServer } from "./server";
 import { Worker } from "bullmq";
 import { ReminderJobData } from "./types";
@@ -25,6 +27,7 @@ import { checkRedisConnection } from "./config/redis";
 
 const prisma = new PrismaClient();
 let reminderWorker: Worker<ReminderJobData> | null = null;
+let briefingWorker: Worker | null = null;
 
 async function main(): Promise<void> {
   console.log("╔══════════════════════════════════════════╗");
@@ -63,18 +66,20 @@ async function main(): Promise<void> {
     console.error(`[Web Server] ❌ Failed to start dashboard: ${errMsg}`);
   }
 
-  // ── Step 3: BullMQ Worker (Optional — fails gracefully if Redis unavailable) ──
+  // ── Step 3: BullMQ Workers (Optional — fails gracefully if Redis unavailable) ──
   const redisUp = await checkRedisConnection();
   if (redisUp) {
     try {
       reminderWorker = startReminderWorker();
-      console.log("[Worker] ✅ BullMQ reminder worker initialised");
+      briefingWorker = startBriefingWorker();
+      await setupBriefingCron();
+      console.log("[Worker] ✅ BullMQ workers and cron jobs initialised");
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
-      console.warn(`[Worker] ⚠️ Reminder worker failed to initialize: ${errMsg}`);
+      console.warn(`[Worker] ⚠️ Workers failed to initialize: ${errMsg}`);
     }
   } else {
-    console.warn("[Worker] ⚠️ Redis is down or unavailable. Reminder worker disabled.");
+    console.warn("[Worker] ⚠️ Redis is down or unavailable. Workers disabled.");
   }
 
   // ── Step 4: WhatsApp ──────────────────────────────────────────────────

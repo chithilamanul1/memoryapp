@@ -191,7 +191,8 @@ function buildConfirmation(
   type: TaskCategory,
   content: string,
   dueAt: string | null,
-  googleSynced: boolean
+  googleSynced: boolean,
+  assignee: string | null = null
 ): string {
   const icons: Record<TaskCategory, string> = {
     REMINDER: "⏰",
@@ -222,11 +223,21 @@ function buildConfirmation(
     reply += `\n🕐 ${formatted}`;
   }
 
+  if (assignee) {
+    reply += `\n👤 Delegated to: *${assignee}*`;
+  }
+
   if (googleSynced) {
     reply += `\n\n📅 _Synced to Google Calendar & Gmail_`;
   }
 
   reply += `\n\n_Stored in your Second Brain 🧠_`;
+
+  if (assignee) {
+    const forwardText = encodeURIComponent(`Hi ${assignee},\n\nReminder: ${content}`);
+    reply += `\n\n👉 *Forward to ${assignee}:*\nhttps://wa.me/?text=${forwardText}`;
+  }
+
   return reply;
 }
 
@@ -514,7 +525,8 @@ export function registerMessageHandler(sock: WASocket): void {
           extraction.type as TaskCategory,
           extraction.content,
           extraction.dueAt,
-          googleSynced
+          googleSynced,
+          extraction.assignee
         );
 
         await sock.sendMessage(jid, { text: reply }, { quoted: message });

@@ -105,4 +105,38 @@ export async function scheduleReminder(
   return job.id!;
 }
 
-export { getQueue as getReminderQueue };
+// ── Daily Briefing Queue ──
+const BRIEFING_QUEUE_NAME = "briefing-queue";
+let briefingQueue: Queue | null = null;
+
+export async function setupBriefingCron(): Promise<void> {
+  if (!isRedisAvailable()) return;
+
+  if (!briefingQueue) {
+    briefingQueue = new Queue(BRIEFING_QUEUE_NAME, {
+      connection: createRedisConnection() as any,
+    });
+  }
+
+  // Clear existing repeatable jobs to avoid duplicates on restart
+  const repeatableJobs = await briefingQueue.getRepeatableJobs();
+  for (const job of repeatableJobs) {
+    await briefingQueue.removeRepeatableByKey(job.key);
+  }
+
+  // Add the daily 7:30 AM (Colombo time) briefing job
+  await briefingQueue.add(
+    "morning-briefing" as any,
+    {},
+    {
+      repeat: {
+        pattern: "30 7 * * *",
+        tz: "Asia/Colombo",
+      },
+    }
+  );
+
+  console.log("[Queue] 📅 Scheduled daily morning briefing at 07:30 Asia/Colombo");
+}
+
+export { getQueue as getReminderQueue, briefingQueue };
