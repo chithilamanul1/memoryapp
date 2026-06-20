@@ -42,22 +42,25 @@ async function main(): Promise<void> {
 
     // Seed Owner from environment variables
     if (process.env.ADMIN_JID) {
-      const adminPhone = process.env.ADMIN_JID.split("@")[0];
-      const existingAdmin = await WhitelistedNumber.findOne({ phone: adminPhone });
+      const adminJids = process.env.ADMIN_JID.split(",").map(j => j.trim());
+      for (const aJid of adminJids) {
+        const adminPhone = aJid.split("@")[0];
+        const existingAdmin = await WhitelistedNumber.findOne({ phone: adminPhone });
 
-      if (existingAdmin) {
-        await WhitelistedNumber.updateOne(
-          { phone: adminPhone },
-          { role: "OWNER", label: "Super Admin (Owner)" }
-        );
-      } else {
-        await WhitelistedNumber.create({
-          phone: adminPhone,
-          role: "OWNER",
-          label: "Super Admin (Owner)",
-        });
+        if (existingAdmin) {
+          await WhitelistedNumber.updateOne(
+            { phone: adminPhone },
+            { role: "OWNER", label: "Super Admin (Owner)" }
+          );
+        } else {
+          await WhitelistedNumber.create({
+            phone: adminPhone,
+            role: "OWNER",
+            label: "Super Admin (Owner)",
+          });
+        }
+        console.log(`[Database] ✅ Seeded Admin/Owner number: +${adminPhone}`);
       }
-      console.log(`[Database] ✅ Seeded Admin/Owner number: +${adminPhone}`);
     }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);

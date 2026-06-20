@@ -50,9 +50,12 @@ export async function getJidRole(jid: string): Promise<WhitelistRole | null> {
 
   // Admin is always OWNER
   if (ADMIN_JID) {
-    const adminPhone = ADMIN_JID.split("@")[0];
-    if (phoneOnly === adminPhone || jid === ADMIN_JID) {
-      return "OWNER";
+    const adminJids = ADMIN_JID.split(",").map(j => j.trim());
+    for (const aJid of adminJids) {
+      const adminPhone = aJid.split("@")[0];
+      if (phoneOnly === adminPhone || jid === aJid) {
+        return "OWNER";
+      }
     }
   }
 
