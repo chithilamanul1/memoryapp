@@ -214,7 +214,8 @@ export function registerMessageHandler(sock: WASocket): void {
         const jid = getJid(message);
         if (!jid) continue;
 
-        if (jid.endsWith("@g.us")) continue;
+        // Skip groups and status updates
+        if (jid.endsWith("@g.us") || jid === "status@broadcast") continue;
 
         // ── Whitelist gate ──
         const allowed = await isWhitelisted(jid);
