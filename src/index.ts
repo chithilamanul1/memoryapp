@@ -35,6 +35,17 @@ async function main(): Promise<void> {
   try {
     await prisma.$connect();
     console.log("[Database] ✅ MongoDB connected via Prisma");
+
+    // Seed Owner from environment variables
+    if (process.env.ADMIN_JID) {
+      const adminPhone = process.env.ADMIN_JID.split("@")[0];
+      await prisma.whitelistedNumber.upsert({
+        where: { phone: adminPhone },
+        update: { role: "OWNER", label: "Super Admin (Owner)" },
+        create: { phone: adminPhone, role: "OWNER", label: "Super Admin (Owner)" },
+      });
+      console.log(`[Database] ✅ Seeded Admin/Owner number: +${adminPhone}`);
+    }
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[Database] ❌ Failed to connect: ${errMsg}`);

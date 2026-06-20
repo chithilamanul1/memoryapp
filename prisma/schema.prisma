@@ -47,13 +47,20 @@ model Task {
   @@map("tasks")
 }
 
+enum WhitelistRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
 model WhitelistedNumber {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  phone     String   @unique
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
+  phone     String        @unique
   label     String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  role      WhitelistRole @default(MEMBER)
+  active    Boolean       @default(true)
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
 
   @@map("whitelisted_numbers")
 }

@@ -14,6 +14,7 @@ import QRCode from "qrcode";
 import { PrismaClient } from "@prisma/client";
 import { getLatestQR, isWhatsAppConnected } from "./whatsapp/connection";
 import { getGoogleAuthUrl, getTokensFromCode, getUserEmail, isGoogleConfigured } from "./services/google.service";
+import { blockedAttempts } from "./whatsapp/messageHandler";
 
 const prisma = new PrismaClient();
 const app = express();
@@ -132,7 +133,7 @@ app.get("/", async (req, res) => {
       </div>
       <div class="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
         <p class="text-gray-400 text-sm font-semibold uppercase tracking-wider">Whitelisted</p>
-        <p class="text-4xl font-bold mt-2 text-cyan-400">${whitelistedNumbers.filter(n => n.active).length}</p>
+        <p class="text-4xl font-bold mt-2 text-cyan-400">${whitelistedNumbers.filter((n: any) => n.active).length}</p>
       </div>
     </div>
 
@@ -149,7 +150,7 @@ app.get("/", async (req, res) => {
               <span>🔐</span>
               <span>Whitelisted Numbers</span>
             </h2>
-            <span class="text-xs text-gray-500">Only these numbers can use the bot</span>
+            <span class="text-xs text-gray-500">Only authorized numbers/JIDs can use this bot</span>
           </div>
           
           <!-- Add Number Form -->
@@ -157,29 +158,38 @@ app.get("/", async (req, res) => {
             <input 
               type="text" 
               name="phone" 
-              placeholder="Phone (e.g. 94771234567)" 
+              placeholder="Phone or JID (e.g. 94728382638 or 17665619968145@lid)" 
               required 
-              class="flex-1 min-w-[180px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
+              class="flex-1 min-w-[200px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
             >
             <input 
               type="text" 
               name="label" 
-              placeholder="Label (e.g. John - Paid User)" 
-              class="flex-1 min-w-[180px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
+              placeholder="Label (e.g. John - Staff)" 
+              class="flex-1 min-w-[150px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
             >
+            <select 
+              name="role" 
+              class="bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-300 focus:outline-none focus:border-purple-500/50"
+            >
+              <option value="MEMBER">Member</option>
+              <option value="ADMIN">Admin / Staff</option>
+              <option value="OWNER">Owner (Super Admin)</option>
+            </select>
             <button 
               type="submit"
               class="bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-700 hover:to-pink-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-purple-600/20 transition-all"
             >+ Add Number</button>
           </form>
-
+ 
           <!-- Whitelisted Numbers Table -->
           <div class="overflow-x-auto">
             <table class="w-full text-left border-collapse">
               <thead>
                 <tr class="border-b border-white/10 text-gray-400 text-sm">
-                  <th class="pb-3 font-semibold">Phone</th>
+                  <th class="pb-3 font-semibold">Phone / JID</th>
                   <th class="pb-3 font-semibold">Label</th>
+                  <th class="pb-3 font-semibold">Role</th>
                   <th class="pb-3 font-semibold">Status</th>
                   <th class="pb-3 font-semibold">Added</th>
                   <th class="pb-3 font-semibold text-right">Actions</th>
@@ -188,12 +198,23 @@ app.get("/", async (req, res) => {
               <tbody class="divide-y divide-white/5 text-sm">
                 ${whitelistedNumbers.length === 0 ? `
                   <tr>
-                    <td colspan="5" class="py-6 text-center text-gray-500">No whitelisted numbers yet. Add one above to start!</td>
+                    <td colspan="6" class="py-6 text-center text-gray-500">No whitelisted numbers yet. Add one above to start!</td>
                   </tr>
-                ` : whitelistedNumbers.map(n => `
+                ` : whitelistedNumbers.map((n: any) => {
+                  let roleColor = "bg-cyan-500/10 border-cyan-500/20 text-cyan-400";
+                  if (n.role === "OWNER") {
+                    roleColor = "bg-rose-500/10 border-rose-500/20 text-rose-400";
+                  } else if (n.role === "ADMIN") {
+                    roleColor = "bg-amber-500/10 border-amber-500/20 text-amber-400";
+                  }
+                  const isOwner = n.role === "OWNER";
+                  return `
                   <tr>
-                    <td class="py-4 font-mono text-gray-200 font-semibold">+${n.phone}</td>
+                    <td class="py-4 font-mono text-gray-200 font-semibold">${n.phone.includes('@') ? n.phone : '+' + n.phone}</td>
                     <td class="py-4 text-gray-400">${n.label || '—'}</td>
+                    <td class="py-4">
+                      <span class="${roleColor} border px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider">${n.role}</span>
+                    </td>
                     <td class="py-4">
                       ${n.active ? `
                         <span class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-semibold">Active</span>
@@ -203,8 +224,76 @@ app.get("/", async (req, res) => {
                     </td>
                     <td class="py-4 text-gray-500 text-xs">${new Date(n.createdAt).toLocaleDateString()}</td>
                     <td class="py-4 text-right space-x-3">
-                      <a href="/whitelist/toggle?id=${n.id}" class="text-amber-400 hover:underline font-semibold text-xs">${n.active ? 'Disable' : 'Enable'}</a>
-                      <a href="/whitelist/remove?id=${n.id}" class="text-rose-400 hover:underline font-semibold text-xs" onclick="return confirm('Remove this number?')">Remove</a>
+                      ${isOwner ? `
+                        <span class="text-gray-600 text-xs font-semibold italic">Protected</span>
+                      ` : `
+                        <a href="/whitelist/toggle?id=${n.id}" class="text-amber-400 hover:underline font-semibold text-xs">${n.active ? 'Disable' : 'Enable'}</a>
+                        <a href="/whitelist/remove?id=${n.id}" class="text-rose-400 hover:underline font-semibold text-xs" onclick="return confirm('Remove this number?')">Remove</a>
+                      `}
+                    </td>
+                  </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ★ Recently Blocked Access Attempts ★ -->
+        <div class="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md overflow-hidden">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold flex items-center space-x-2 text-rose-400">
+              <span>🛡️</span>
+              <span>Recently Blocked Access Attempts</span>
+            </h2>
+            <span class="text-xs text-gray-500">Click to instantly whitelist any blocked user</span>
+          </div>
+          
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-white/10 text-gray-400 text-sm">
+                  <th class="pb-3 font-semibold">JID / Phone</th>
+                  <th class="pb-3 font-semibold">Name</th>
+                  <th class="pb-3 font-semibold">Time</th>
+                  <th class="pb-3 font-semibold text-right">Instant Whitelist</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-white/5 text-sm">
+                ${blockedAttempts.length === 0 ? `
+                  <tr>
+                    <td colspan="4" class="py-6 text-center text-gray-500">No blocked attempts logged recently. All messages are authorized!</td>
+                  </tr>
+                ` : blockedAttempts.map(a => `
+                  <tr>
+                    <td class="py-4 font-mono text-gray-200 font-semibold">${a.jid}</td>
+                    <td class="py-4 text-gray-400">${a.name}</td>
+                    <td class="py-4 text-gray-500 text-xs">${new Date(a.time).toLocaleTimeString()}</td>
+                    <td class="py-4 text-right space-x-2">
+                      <form action="/whitelist/add" method="POST" class="inline">
+                        <input type="hidden" name="phone" value="${a.jid}">
+                        <input type="hidden" name="label" value="${a.name}">
+                        <input type="hidden" name="role" value="MEMBER">
+                        <button type="submit" class="bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 border border-cyan-500/25 px-2.5 py-1 rounded-lg text-xs font-bold transition-all">
+                          + Member
+                        </button>
+                      </form>
+                      <form action="/whitelist/add" method="POST" class="inline">
+                        <input type="hidden" name="phone" value="${a.jid}">
+                        <input type="hidden" name="label" value="${a.name}">
+                        <input type="hidden" name="role" value="ADMIN">
+                        <button type="submit" class="bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 border border-amber-500/25 px-2.5 py-1 rounded-lg text-xs font-bold transition-all">
+                          + Admin
+                        </button>
+                      </form>
+                      <form action="/whitelist/add" method="POST" class="inline">
+                        <input type="hidden" name="phone" value="${a.jid}">
+                        <input type="hidden" name="label" value="${a.name}">
+                        <input type="hidden" name="role" value="OWNER">
+                        <button type="submit" class="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 border border-rose-500/25 px-2.5 py-1 rounded-lg text-xs font-bold transition-all" onclick="return confirm('Promote this user to Owner?')">
+                          + Owner
+                        </button>
+                      </form>
                     </td>
                   </tr>
                 `).join('')}
@@ -234,7 +323,7 @@ app.get("/", async (req, res) => {
                   <tr>
                     <td colspan="4" class="py-6 text-center text-gray-500">No users found. Send a message to the bot to create a user!</td>
                   </tr>
-                ` : users.map(u => {
+                ` : users.map((u: any) => {
                   const googleAuthUrl = getGoogleAuthUrl(u.whatsappJid);
                   return `
                     <tr>
@@ -279,7 +368,7 @@ app.get("/", async (req, res) => {
           <div class="space-y-4">
             ${recentTasks.length === 0 ? `
               <p class="text-gray-500 text-center py-4">No recent tasks or brain inputs found.</p>
-            ` : recentTasks.map(t => `
+            ` : recentTasks.map((t: any) => `
               <div class="flex items-start justify-between bg-white/5 border border-white/5 p-4 rounded-xl">
                 <div>
                   <div class="flex items-center space-x-2">
@@ -358,30 +447,34 @@ app.get("/", async (req, res) => {
 
 // ── Whitelist Management Routes ──────────────────────────────────────────
 
-// Add a number to the whitelist
+// Add a number or JID to the whitelist
 app.post("/whitelist/add", async (req, res) => {
-  const { phone, label } = req.body;
+  const { phone, label, role } = req.body;
 
   if (!phone) {
-    return res.redirect("/?error=" + encodeURIComponent("Phone number is required."));
+    return res.redirect("/?error=" + encodeURIComponent("Phone number or JID is required."));
   }
 
-  // Strip any non-digit characters (allow users to enter +94 77 123 4567 etc.)
-  const cleanPhone = phone.replace(/\D/g, "");
-
-  if (cleanPhone.length < 7 || cleanPhone.length > 15) {
-    return res.redirect("/?error=" + encodeURIComponent("Invalid phone number format. Enter country code + number (e.g. 94771234567)."));
+  let cleanPhone = phone.trim();
+  // If it's a standard phone number (no @ symbol), clean it
+  if (!cleanPhone.includes("@")) {
+    cleanPhone = cleanPhone.replace(/\D/g, "");
+    if (cleanPhone.length < 7 || cleanPhone.length > 15) {
+      return res.redirect("/?error=" + encodeURIComponent("Invalid phone number format. Enter country code + number (e.g. 94771234567)."));
+    }
   }
+
+  const targetRole = (role === "OWNER" || role === "ADMIN" || role === "MEMBER") ? role : "MEMBER";
 
   try {
     await prisma.whitelistedNumber.upsert({
       where: { phone: cleanPhone },
-      update: { label: label || null, active: true },
-      create: { phone: cleanPhone, label: label || null },
+      update: { label: label || null, role: targetRole, active: true },
+      create: { phone: cleanPhone, label: label || null, role: targetRole },
     });
 
-    console.log(`[Whitelist] ✅ Added/updated number: ${cleanPhone} (${label || 'no label'})`);
-    res.redirect("/?success=" + encodeURIComponent(`Number +${cleanPhone} has been whitelisted!`));
+    console.log(`[Whitelist] ✅ Added/updated: ${cleanPhone} (${label || 'no label'}, role: ${targetRole})`);
+    res.redirect("/?success=" + encodeURIComponent(`Number/JID ${cleanPhone} has been whitelisted as ${targetRole}!`));
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error("[Whitelist] Error adding number:", errMsg);
@@ -403,6 +496,10 @@ app.get("/whitelist/toggle", async (req, res) => {
       return res.redirect("/?error=" + encodeURIComponent("Number not found."));
     }
 
+    if (existing.role === "OWNER") {
+      return res.redirect("/?error=" + encodeURIComponent("Cannot disable the Owner."));
+    }
+
     await prisma.whitelistedNumber.update({
       where: { id: id as string },
       data: { active: !existing.active },
@@ -410,7 +507,7 @@ app.get("/whitelist/toggle", async (req, res) => {
 
     const status = !existing.active ? "enabled" : "disabled";
     console.log(`[Whitelist] Toggled ${existing.phone} → ${status}`);
-    res.redirect("/?success=" + encodeURIComponent(`Number +${existing.phone} has been ${status}.`));
+    res.redirect("/?success=" + encodeURIComponent(`Number ${existing.phone} has been ${status}.`));
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     res.redirect("/?error=" + encodeURIComponent(`Failed to toggle: ${errMsg}`));
@@ -426,9 +523,18 @@ app.get("/whitelist/remove", async (req, res) => {
   }
 
   try {
-    const deleted = await prisma.whitelistedNumber.delete({ where: { id: id as string } });
-    console.log(`[Whitelist] ❌ Removed number: ${deleted.phone}`);
-    res.redirect("/?success=" + encodeURIComponent(`Number +${deleted.phone} has been removed from the whitelist.`));
+    const existing = await prisma.whitelistedNumber.findUnique({ where: { id: id as string } });
+    if (!existing) {
+      return res.redirect("/?error=" + encodeURIComponent("Number not found."));
+    }
+
+    if (existing.role === "OWNER") {
+      return res.redirect("/?error=" + encodeURIComponent("Cannot remove the Owner."));
+    }
+
+    await prisma.whitelistedNumber.delete({ where: { id: id as string } });
+    console.log(`[Whitelist] ❌ Removed number: ${existing.phone}`);
+    res.redirect("/?success=" + encodeURIComponent(`Number ${existing.phone} has been removed from the whitelist.`));
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     res.redirect("/?error=" + encodeURIComponent(`Failed to remove: ${errMsg}`));

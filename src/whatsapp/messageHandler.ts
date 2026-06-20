@@ -14,7 +14,7 @@
  */
 
 import { WASocket, WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { PrismaClient, TaskCategory } from "@prisma/client";
+import { PrismaClient, TaskCategory, WhitelistRole } from "@prisma/client";
 import { extractIntent } from "../services/ai.service";
 import { scheduleReminder } from "../services/queue.service";
 import { createGoogleCalendarEvent, sendGmail, getGoogleAuthUrl } from "../services/google.service";
@@ -24,25 +24,59 @@ const prisma = new PrismaClient();
 const TIMEZONE: string = process.env.TIMEZONE || "Asia/Colombo";
 const ADMIN_JID: string = process.env.ADMIN_JID || "";
 
-/**
- * Checks if a WhatsApp JID is whitelisted.
- * The ADMIN_JID is always allowed. Otherwise, the phone portion
- * of the JID is looked up in the whitelisted_numbers collection.
- */
-async function isWhitelisted(jid: string): Promise<boolean> {
-  const phone = jid.split("@")[0];
+// ── Blocked Attempts Store ─────────────────────────────────────────────
+export interface BlockedAttempt {
+  jid: string;
+  name: string;
+  time: Date;
+}
 
-  // Admin is always whitelisted
+export const blockedAttempts: BlockedAttempt[] = [];
+
+export function addToBlockedAttempts(jid: string, name: string): void {
+  const index = blockedAttempts.findIndex((a) => a.jid === jid);
+  if (index !== -1) {
+    blockedAttempts.splice(index, 1);
+  }
+  blockedAttempts.unshift({ jid, name, time: new Date() });
+  if (blockedAttempts.length > 20) {
+    blockedAttempts.pop();
+  }
+}
+
+/**
+ * Retrieves the WhitelistRole for a JID, fallback checking phone number part.
+ */
+export async function getJidRole(jid: string): Promise<WhitelistRole | null> {
+  const phoneOnly = jid.split("@")[0];
+
+  // Admin is always OWNER
   if (ADMIN_JID) {
     const adminPhone = ADMIN_JID.split("@")[0];
-    if (phone === adminPhone) return true;
+    if (phoneOnly === adminPhone || jid === ADMIN_JID) {
+      return "OWNER";
+    }
   }
 
-  const entry = await prisma.whitelistedNumber.findUnique({
-    where: { phone },
+  const entry = await prisma.whitelistedNumber.findFirst({
+    where: {
+      OR: [
+        { phone: phoneOnly },
+        { phone: jid }
+      ]
+    }
   });
 
-  return !!entry && entry.active;
+  if (!entry || !entry.active) return null;
+  return entry.role;
+}
+
+/**
+ * Checks if a JID is whitelisted.
+ */
+async function isWhitelisted(jid: string): Promise<boolean> {
+  const role = await getJidRole(jid);
+  return role !== null;
 }
 
 // ── Utility helpers ────────────────────────────────────────────────────
@@ -217,18 +251,130 @@ export function registerMessageHandler(sock: WASocket): void {
         // Skip groups and status updates
         if (jid.endsWith("@g.us") || jid === "status@broadcast") continue;
 
+        const role = await getJidRole(jid);
+        const text = getMessageText(message);
+
+        // ── WhatsApp Admin Commands ──
+        if (text && text.trim().startsWith("!whitelist")) {
+          if (role === "OWNER" || role === "ADMIN") {
+            const parts = text.trim().split(/\s+/);
+            const cmd = parts[1]?.toLowerCase();
+
+            if (cmd === "add") {
+              const targetPhone = parts[2];
+              if (!targetPhone) {
+                await sock.sendMessage(jid, {
+                  text: "❌ *Usage:*\n`!whitelist add <phone/JID> [label] [role]`\n\nExample:\n`!whitelist add 94771112222 Alice ADMIN`",
+                }, { quoted: message });
+                continue;
+              }
+
+              let targetRole: WhitelistRole = "MEMBER";
+              let label = "";
+
+              if (parts.length > 3) {
+                const lastWord = parts[parts.length - 1].toUpperCase();
+                if (lastWord === "MEMBER" || lastWord === "ADMIN" || lastWord === "OWNER") {
+                  targetRole = lastWord as WhitelistRole;
+                  label = parts.slice(3, parts.length - 1).join(" ");
+                } else {
+                  label = parts.slice(3).join(" ");
+                }
+              }
+
+              // Access check: only OWNER can add/promote to OWNER or ADMIN
+              if (targetRole === "OWNER" && role !== "OWNER") {
+                await sock.sendMessage(jid, { text: "❌ Only the Owner can create other Owners." }, { quoted: message });
+                continue;
+              }
+              if (targetRole === "ADMIN" && role !== "OWNER") {
+                await sock.sendMessage(jid, { text: "❌ Only the Owner can create Admins." }, { quoted: message });
+                continue;
+              }
+
+              const cleanPhone = targetPhone.replace(/\+/g, "");
+
+              await prisma.whitelistedNumber.upsert({
+                where: { phone: cleanPhone },
+                update: { label: label || null, role: targetRole, active: true },
+                create: { phone: cleanPhone, label: label || null, role: targetRole },
+              });
+
+              await sock.sendMessage(jid, {
+                text: `✅ *Success*\n\nNumber/JID *+${cleanPhone}* has been whitelisted as *${targetRole}*.\nLabel: ${label || "none"}`,
+              }, { quoted: message });
+              continue;
+            }
+
+            if (cmd === "remove") {
+              const targetPhone = parts[2];
+              if (!targetPhone) {
+                await sock.sendMessage(jid, { text: "❌ *Usage:*\n`!whitelist remove <phone/JID>`" }, { quoted: message });
+                continue;
+              }
+
+              const cleanPhone = targetPhone.replace(/\+/g, "");
+
+              const existing = await prisma.whitelistedNumber.findUnique({
+                where: { phone: cleanPhone },
+              });
+
+              if (!existing) {
+                await sock.sendMessage(jid, { text: `❌ Number/JID *${cleanPhone}* is not on the whitelist.` }, { quoted: message });
+                continue;
+              }
+
+              if (existing.role === "OWNER" && role !== "OWNER") {
+                await sock.sendMessage(jid, { text: "❌ You cannot remove the Owner." }, { quoted: message });
+                continue;
+              }
+              if (existing.role === "ADMIN" && role !== "OWNER") {
+                await sock.sendMessage(jid, { text: "❌ Only the Owner can remove Admins." }, { quoted: message });
+                continue;
+              }
+
+              await prisma.whitelistedNumber.delete({
+                where: { phone: cleanPhone },
+              });
+
+              await sock.sendMessage(jid, {
+                text: `✅ *Removed*\n\nNumber/JID *${cleanPhone}* has been removed from the whitelist.`,
+              }, { quoted: message });
+              continue;
+            }
+
+            if (cmd === "list") {
+              const all = await prisma.whitelistedNumber.findMany({
+                orderBy: { role: "asc" },
+              });
+
+              let listText = "📋 *Whitelisted Numbers & JIDs:*\n\n";
+              for (const item of all) {
+                listText += `• *+${item.phone}* [${item.role}] - ${item.label || "No label"} (${item.active ? "Active" : "Disabled"})\n`;
+              }
+
+              await sock.sendMessage(jid, { text: listText }, { quoted: message });
+              continue;
+            }
+
+            await sock.sendMessage(jid, {
+              text: "❌ *Unknown Whitelist Command*\n\nAvailable commands:\n• `!whitelist list`\n• `!whitelist add <phone/JID> [label] [role]`\n• `!whitelist remove <phone/JID>`",
+            }, { quoted: message });
+            continue;
+          }
+        }
+
         // ── Whitelist gate ──
-        const allowed = await isWhitelisted(jid);
-        if (!allowed) {
+        if (role === null) {
           console.log(`[Whitelist] ⛔ Blocked message from non-whitelisted JID: ${jid}`);
+          addToBlockedAttempts(jid, message.pushName || "Unknown");
+
           await sock.sendMessage(jid, {
             text: "🔒 *Access Restricted*\n\nThis bot is private. Your number is not authorized to use this service.\n\nContact the administrator to get access.",
           });
           continue;
         }
 
-        const text = getMessageText(message);
-        
         // ── Handle Command Triggers ──
         if (text) {
           const trimmed = text.trim().toLowerCase();
