@@ -180,7 +180,7 @@ export async function extractIntent(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: AI_MODEL,
+        model: (input.audio || input.image) ? "google/gemini-2.5-flash" : AI_MODEL,
         messages: [
           {
             role: "system",
