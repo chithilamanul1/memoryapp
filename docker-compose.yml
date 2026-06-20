@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  # Redis service required for BullMQ queues/workers
+  redis:
+    image: redis:7-alpine
+    container_name: sera_redis
+    restart: always
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+
+  # WhatsApp Second Brain App
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sera_brain_app
+    restart: always
+    depends_on:
+      - redis
+    environment:
+      - NODE_ENV=production
+      - TIMEZONE=Asia/Colombo
+      - DATABASE_URL=mongodb://mongo:fvquwo6ronfruznx@test-memoryapp-whqlxd:27017/sera_brain?authSource=admin&directConnection=true
+      - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=your-gemini-api-key-here
+      - AI_MODEL=gemini-2.0-flash
+    volumes:
+      # Crucial: Persists WhatsApp login keys so you don't scan QR on every restart/deploy
+      - ./auth_info:/usr/src/app/auth_info
+
+volumes:
+  redisdata:
