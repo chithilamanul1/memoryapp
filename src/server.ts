@@ -6,6 +6,7 @@
  *   - Rendering real-time QR pairing codes
  *   - Initiating and completing Google OAuth linking per user
  *   - Visualizing tasks and database statistics
+ *   - Managing whitelisted phone numbers
  */
 
 import express from "express";
@@ -50,6 +51,10 @@ app.get("/", async (req, res) => {
       include: { user: true },
     });
 
+    const whitelistedNumbers = await prisma.whitelistedNumber.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+
     const googleActive = isGoogleConfigured();
 
     const html = `
@@ -66,6 +71,9 @@ app.get("/", async (req, res) => {
       font-family: 'Outfit', sans-serif;
       background: radial-gradient(circle at top left, #120e24, #0b0716);
     }
+    .toggle-active { background: #10b981; }
+    .toggle-inactive { background: #6b7280; }
+    .toggle-knob { transition: transform 0.2s ease; }
   </style>
 </head>
 <body class="min-h-screen text-gray-100 flex flex-col">
@@ -123,8 +131,8 @@ app.get("/", async (req, res) => {
         <p class="text-4xl font-bold mt-2 text-amber-400">${pendingTasks}</p>
       </div>
       <div class="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md">
-        <p class="text-gray-400 text-sm font-semibold uppercase tracking-wider">Completed Logs</p>
-        <p class="text-4xl font-bold mt-2 text-emerald-400">${completedTasks}</p>
+        <p class="text-gray-400 text-sm font-semibold uppercase tracking-wider">Whitelisted</p>
+        <p class="text-4xl font-bold mt-2 text-cyan-400">${whitelistedNumbers.filter(n => n.active).length}</p>
       </div>
     </div>
 
@@ -133,6 +141,77 @@ app.get("/", async (req, res) => {
       
       <!-- Left / Center: Users list & Tasks -->
       <div class="lg:col-span-2 space-y-8">
+
+        <!-- ★ Whitelisted Numbers Management Card ★ -->
+        <div class="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md overflow-hidden">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold flex items-center space-x-2">
+              <span>🔐</span>
+              <span>Whitelisted Numbers</span>
+            </h2>
+            <span class="text-xs text-gray-500">Only these numbers can use the bot</span>
+          </div>
+          
+          <!-- Add Number Form -->
+          <form action="/whitelist/add" method="POST" class="flex flex-wrap gap-3 mb-6">
+            <input 
+              type="text" 
+              name="phone" 
+              placeholder="Phone (e.g. 94771234567)" 
+              required 
+              class="flex-1 min-w-[180px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
+            >
+            <input 
+              type="text" 
+              name="label" 
+              placeholder="Label (e.g. John - Paid User)" 
+              class="flex-1 min-w-[180px] bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/20"
+            >
+            <button 
+              type="submit"
+              class="bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-700 hover:to-pink-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-purple-600/20 transition-all"
+            >+ Add Number</button>
+          </form>
+
+          <!-- Whitelisted Numbers Table -->
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-white/10 text-gray-400 text-sm">
+                  <th class="pb-3 font-semibold">Phone</th>
+                  <th class="pb-3 font-semibold">Label</th>
+                  <th class="pb-3 font-semibold">Status</th>
+                  <th class="pb-3 font-semibold">Added</th>
+                  <th class="pb-3 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-white/5 text-sm">
+                ${whitelistedNumbers.length === 0 ? `
+                  <tr>
+                    <td colspan="5" class="py-6 text-center text-gray-500">No whitelisted numbers yet. Add one above to start!</td>
+                  </tr>
+                ` : whitelistedNumbers.map(n => `
+                  <tr>
+                    <td class="py-4 font-mono text-gray-200 font-semibold">+${n.phone}</td>
+                    <td class="py-4 text-gray-400">${n.label || '—'}</td>
+                    <td class="py-4">
+                      ${n.active ? `
+                        <span class="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-semibold">Active</span>
+                      ` : `
+                        <span class="bg-rose-500/10 border border-rose-500/20 text-rose-400 px-3 py-1 rounded-full text-xs font-semibold">Disabled</span>
+                      `}
+                    </td>
+                    <td class="py-4 text-gray-500 text-xs">${new Date(n.createdAt).toLocaleDateString()}</td>
+                    <td class="py-4 text-right space-x-3">
+                      <a href="/whitelist/toggle?id=${n.id}" class="text-amber-400 hover:underline font-semibold text-xs">${n.active ? 'Disable' : 'Enable'}</a>
+                      <a href="/whitelist/remove?id=${n.id}" class="text-rose-400 hover:underline font-semibold text-xs" onclick="return confirm('Remove this number?')">Remove</a>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
         
         <!-- Users Management Card -->
         <div class="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-md overflow-hidden">
@@ -259,9 +338,11 @@ app.get("/", async (req, res) => {
 
   <script>
     // Live update every 5 seconds to catch connection change or QR generation
+    // Only reload if no input is currently focused (to avoid disrupting form filling)
     setInterval(() => {
-      // Avoid reloading if user is filling forms (not present currently)
-      window.location.reload();
+      if (!document.activeElement || document.activeElement.tagName !== 'INPUT') {
+        window.location.reload();
+      }
     }, 5000);
   </script>
 </body>
@@ -272,6 +353,85 @@ app.get("/", async (req, res) => {
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
     res.status(500).send(`Error rendering dashboard: ${errMsg}`);
+  }
+});
+
+// ── Whitelist Management Routes ──────────────────────────────────────────
+
+// Add a number to the whitelist
+app.post("/whitelist/add", async (req, res) => {
+  const { phone, label } = req.body;
+
+  if (!phone) {
+    return res.redirect("/?error=" + encodeURIComponent("Phone number is required."));
+  }
+
+  // Strip any non-digit characters (allow users to enter +94 77 123 4567 etc.)
+  const cleanPhone = phone.replace(/\D/g, "");
+
+  if (cleanPhone.length < 7 || cleanPhone.length > 15) {
+    return res.redirect("/?error=" + encodeURIComponent("Invalid phone number format. Enter country code + number (e.g. 94771234567)."));
+  }
+
+  try {
+    await prisma.whitelistedNumber.upsert({
+      where: { phone: cleanPhone },
+      update: { label: label || null, active: true },
+      create: { phone: cleanPhone, label: label || null },
+    });
+
+    console.log(`[Whitelist] ✅ Added/updated number: ${cleanPhone} (${label || 'no label'})`);
+    res.redirect("/?success=" + encodeURIComponent(`Number +${cleanPhone} has been whitelisted!`));
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error("[Whitelist] Error adding number:", errMsg);
+    res.redirect("/?error=" + encodeURIComponent(`Failed to add number: ${errMsg}`));
+  }
+});
+
+// Toggle a whitelisted number active/inactive
+app.get("/whitelist/toggle", async (req, res) => {
+  const { id } = req.query;
+
+  if (!id) {
+    return res.redirect("/?error=" + encodeURIComponent("Missing ID."));
+  }
+
+  try {
+    const existing = await prisma.whitelistedNumber.findUnique({ where: { id: id as string } });
+    if (!existing) {
+      return res.redirect("/?error=" + encodeURIComponent("Number not found."));
+    }
+
+    await prisma.whitelistedNumber.update({
+      where: { id: id as string },
+      data: { active: !existing.active },
+    });
+
+    const status = !existing.active ? "enabled" : "disabled";
+    console.log(`[Whitelist] Toggled ${existing.phone} → ${status}`);
+    res.redirect("/?success=" + encodeURIComponent(`Number +${existing.phone} has been ${status}.`));
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    res.redirect("/?error=" + encodeURIComponent(`Failed to toggle: ${errMsg}`));
+  }
+});
+
+// Remove a whitelisted number
+app.get("/whitelist/remove", async (req, res) => {
+  const { id } = req.query;
+
+  if (!id) {
+    return res.redirect("/?error=" + encodeURIComponent("Missing ID."));
+  }
+
+  try {
+    const deleted = await prisma.whitelistedNumber.delete({ where: { id: id as string } });
+    console.log(`[Whitelist] ❌ Removed number: ${deleted.phone}`);
+    res.redirect("/?success=" + encodeURIComponent(`Number +${deleted.phone} has been removed from the whitelist.`));
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    res.redirect("/?error=" + encodeURIComponent(`Failed to remove: ${errMsg}`));
   }
 });
 

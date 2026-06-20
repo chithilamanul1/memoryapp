@@ -27,13 +27,14 @@ services:
       - TIMEZONE=Asia/Colombo
       - DATABASE_URL=mongodb://mongo:fvquwo6ronfruznx@test-memoryapp-whqlxd:27017/sera_brain?authSource=admin&directConnection=true
       - REDIS_URL=redis://redis:6379
-      - OPENROUTER_API_KEY=your-openrouter-api-key-here
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-changeme}
       - AI_MODEL=google/gemini-2.0-flash-exp:free
       - GOOGLE_CLIENT_ID=289815195000-4259v1jc7qgttmhkppdl4to7clt2b066.apps.googleusercontent.com
       - GOOGLE_CLIENT_SECRET=
       - GOOGLE_REDIRECT_URI=http://localhost:3000/oauth2callback
       - GOOGLE_REFRESH_TOKEN=
       - USER_EMAIL=
+      - ADMIN_JID=
     volumes:
       # Crucial: Persists WhatsApp login keys so you don't scan QR on every restart/deploy
       - ./auth_info:/usr/src/app/auth_info

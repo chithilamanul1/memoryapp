@@ -46,3 +46,14 @@ model Task {
   @@index([completed])
   @@map("tasks")
 }
+
+model WhitelistedNumber {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  phone     String   @unique
+  label     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("whitelisted_numbers")
+}

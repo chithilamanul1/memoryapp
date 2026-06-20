@@ -22,6 +22,26 @@ import { createGoogleCalendarEvent, sendGmail, getGoogleAuthUrl } from "../servi
 const prisma = new PrismaClient();
 
 const TIMEZONE: string = process.env.TIMEZONE || "Asia/Colombo";
+const ADMIN_JID: string = process.env.ADMIN_JID || "";
+
+/**
+ * Checks if a WhatsApp JID is whitelisted.
+ * The ADMIN_JID is always allowed. Otherwise, the phone portion
+ * of the JID is looked up in the whitelisted_numbers collection.
+ */
+async function isWhitelisted(jid: string): Promise<boolean> {
+  // Admin is always whitelisted
+  if (ADMIN_JID && jid === ADMIN_JID) return true;
+
+  // Extract phone number from JID (e.g. "94771234567@s.whatsapp.net" → "94771234567")
+  const phone = jid.replace("@s.whatsapp.net", "");
+
+  const entry = await prisma.whitelistedNumber.findUnique({
+    where: { phone },
+  });
+
+  return !!entry && entry.active;
+}
 
 // ── Utility helpers ────────────────────────────────────────────────────
 
@@ -193,6 +213,16 @@ export function registerMessageHandler(sock: WASocket): void {
         if (!jid) continue;
 
         if (jid.endsWith("@g.us")) continue;
+
+        // ── Whitelist gate ──
+        const allowed = await isWhitelisted(jid);
+        if (!allowed) {
+          console.log(`[Whitelist] ⛔ Blocked message from non-whitelisted JID: ${jid}`);
+          await sock.sendMessage(jid, {
+            text: "🔒 *Access Restricted*\n\nThis bot is private. Your number is not authorized to use this service.\n\nContact the administrator to get access.",
+          });
+          continue;
+        }
 
         const text = getMessageText(message);
         
