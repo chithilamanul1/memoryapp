@@ -4,6 +4,8 @@
  * Creates a durable "reminder-queue" backed by Redis.
  * Reminders are scheduled using BullMQ's built-in `delay` option so the
  * job only becomes processable once the target time arrives.
+ *
+ * If Redis is not available, scheduling is silently skipped.
  */
 
 import { Queue } from "bullmq";
@@ -12,23 +14,44 @@ import { ReminderJobData } from "../types";
 
 const REMINDER_QUEUE_NAME = "reminder-queue";
 
-/** Singleton reminder queue instance. */
-export const reminderQueue = new Queue<ReminderJobData>(REMINDER_QUEUE_NAME, {
-  connection: createRedisConnection() as any,
-  defaultJobOptions: {
-    removeOnComplete: { count: 100 },   // Keep last 100 completed for debugging
-    removeOnFail: { count: 50 },        // Keep last 50 failed for inspection
-    attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 5000, // 5s → 10s → 20s
-    },
-  },
-});
+/** Lazily initialised queue — null if Redis is unavailable. */
+let reminderQueue: Queue<ReminderJobData> | null = null;
+let queueInitFailed = false;
 
-reminderQueue.on("error", (err: Error) => {
-  console.error("[Queue] Reminder queue error:", err.message);
-});
+/**
+ * Returns the reminder queue, creating it on first call.
+ * Returns null if Redis is not available.
+ */
+function getQueue(): Queue<ReminderJobData> | null {
+  if (queueInitFailed) return null;
+  if (reminderQueue) return reminderQueue;
+
+  try {
+    reminderQueue = new Queue<ReminderJobData>(REMINDER_QUEUE_NAME, {
+      connection: createRedisConnection() as any,
+      defaultJobOptions: {
+        removeOnComplete: { count: 100 },   // Keep last 100 completed for debugging
+        removeOnFail: { count: 50 },        // Keep last 50 failed for inspection
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 5000, // 5s → 10s → 20s
+        },
+      },
+    });
+
+    reminderQueue.on("error", (err: Error) => {
+      console.error("[Queue] Reminder queue error:", err.message);
+    });
+
+    return reminderQueue;
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Queue] ⚠️ Could not create reminder queue: ${errMsg}`);
+    queueInitFailed = true;
+    return null;
+  }
+}
 
 /**
  * Schedules a reminder to be sent at a specific future date.
@@ -37,18 +60,25 @@ reminderQueue.on("error", (err: Error) => {
  * @param executeAt - The exact Date when the reminder should fire.
  * @param targetJid - The WhatsApp JID to send the reminder to.
  * @param message   - The human-readable reminder text.
- * @returns The BullMQ job ID.
+ * @returns The BullMQ job ID, or null if Redis is unavailable.
  */
 export async function scheduleReminder(
   taskId: string,
   executeAt: Date,
   targetJid: string,
   message: string
-): Promise<string> {
+): Promise<string | null> {
+  const queue = getQueue();
+
+  if (!queue) {
+    console.warn(`[Queue] ⚠️ Skipped scheduling reminder "${message}" — Redis not available`);
+    return null;
+  }
+
   const now = Date.now();
   const delayMs = Math.max(0, executeAt.getTime() - now);
 
-  const job = await reminderQueue.add(
+  const job = await queue.add(
     "send-reminder" as any,
     {
       taskId,
@@ -74,3 +104,5 @@ export async function scheduleReminder(
 
   return job.id!;
 }
+
+export { getQueue as getReminderQueue };
