@@ -30,11 +30,13 @@ const ADMIN_JID: string = process.env.ADMIN_JID || "";
  * of the JID is looked up in the whitelisted_numbers collection.
  */
 async function isWhitelisted(jid: string): Promise<boolean> {
-  // Admin is always whitelisted
-  if (ADMIN_JID && jid === ADMIN_JID) return true;
+  const phone = jid.split("@")[0];
 
-  // Extract phone number from JID (e.g. "94771234567@s.whatsapp.net" → "94771234567")
-  const phone = jid.replace("@s.whatsapp.net", "");
+  // Admin is always whitelisted
+  if (ADMIN_JID) {
+    const adminPhone = ADMIN_JID.split("@")[0];
+    if (phone === adminPhone) return true;
+  }
 
   const entry = await prisma.whitelistedNumber.findUnique({
     where: { phone },
